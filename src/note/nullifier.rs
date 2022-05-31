@@ -1,3 +1,4 @@
+use std::hash::{Hash, Hasher};
 use group::{ff::PrimeField, Group};
 use halo2_proofs::arithmetic::CurveExt;
 use pasta_curves::pallas;
@@ -13,6 +14,12 @@ use crate::{
 /// A unique nullifier for a note.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Nullifier(pub(crate) pallas::Base);
+
+impl Hash for Nullifier {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(&self.0.to_repr())
+    }
+}
 
 impl Nullifier {
     /// Generates a dummy nullifier for use as $\rho$ in dummy spent notes.

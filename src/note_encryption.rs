@@ -80,7 +80,7 @@ where
 }
 
 /// Orchard-specific note encryption logic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OrchardDomain {
     rho: Nullifier,
 }
@@ -90,6 +90,13 @@ impl OrchardDomain {
     pub fn for_action<T>(act: &Action<T>) -> Self {
         OrchardDomain {
             rho: *act.nullifier(),
+        }
+    }
+
+    ///
+    pub fn from_nullifier(rho: Nullifier) -> OrchardDomain {
+        OrchardDomain {
+            rho,
         }
     }
 }
