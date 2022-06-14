@@ -42,7 +42,8 @@ impl RandomSeed {
         CtOption::new(rseed, esk.is_some())
     }
 
-    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+    ///
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
@@ -182,7 +183,7 @@ impl Note {
     }
 
     /// Returns the rseed value of this note.
-    pub(crate) fn rseed(&self) -> &RandomSeed {
+    pub fn rseed(&self) -> &RandomSeed {
         &self.rseed
     }
 

@@ -92,6 +92,13 @@ impl OrchardDomain {
             rho: *act.nullifier(),
         }
     }
+
+    ///
+    pub fn for_nullifier(nullifier: Nullifier) -> Self {
+        OrchardDomain {
+            rho: nullifier,
+        }
+    }
 }
 
 impl Domain for OrchardDomain {
