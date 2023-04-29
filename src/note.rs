@@ -165,7 +165,7 @@ impl Note {
     /// Defined in [Zcash Protocol Spec § 4.8.3: Dummy Notes (Orchard)][orcharddummynotes].
     ///
     /// [orcharddummynotes]: https://zips.z.cash/protocol/nu5.pdf#orcharddummynotes
-    pub(crate) fn dummy(
+    pub fn dummy(
         rng: &mut impl RngCore,
         rho: Option<Nullifier>,
     ) -> (SpendingKey, FullViewingKey, Self) {

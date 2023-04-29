@@ -856,7 +856,8 @@ impl EphemeralPublicKey {
         NonIdentityPallasPoint::from_bytes(bytes).map(EphemeralPublicKey)
     }
 
-    pub(crate) fn to_bytes(&self) -> EphemeralKeyBytes {
+    ///
+    pub fn to_bytes(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.0.to_bytes())
     }
 

@@ -535,9 +535,9 @@ impl<S: InProgressSignatures, V> Bundle<InProgress<Unproven, S>, V> {
 pub struct SigningParts {
     /// The spend validating key for this action. Used to match spend authorizing keys to
     /// actions they can create signatures for.
-    ak: SpendValidatingKey,
+    pub ak: SpendValidatingKey,
     /// The randomization needed to derive the actual signing key for this note.
-    alpha: pallas::Scalar,
+    pub alpha: pallas::Scalar,
 }
 
 /// Marker for an unauthorized bundle with no signatures.
@@ -558,8 +558,9 @@ pub struct SigningMetadata {
     ///
     /// These keys are used automatically in [`Bundle<Unauthorized>::prepare`] or
     /// [`Bundle<Unauthorized>::apply_signatures`] to sign dummy spends.
-    dummy_ask: Option<SpendAuthorizingKey>,
-    parts: SigningParts,
+    pub dummy_ask: Option<SpendAuthorizingKey>,
+    /// 
+    pub parts: SigningParts,
 }
 
 /// Marker for a partially-authorized bundle, in the process of being signed.
