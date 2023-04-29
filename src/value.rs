@@ -250,16 +250,17 @@ impl<'a> Sum<&'a ValueCommitTrapdoor> for ValueCommitTrapdoor {
 
 impl ValueCommitTrapdoor {
     /// Generates a new value commitment trapdoor.
-    pub(crate) fn random(rng: impl RngCore) -> Self {
+    pub fn random(rng: impl RngCore) -> Self {
         ValueCommitTrapdoor(pallas::Scalar::random(rng))
     }
 
     /// Returns the zero trapdoor, which provides no blinding.
-    pub(crate) fn zero() -> Self {
+    pub fn zero() -> Self {
         ValueCommitTrapdoor(pallas::Scalar::zero())
     }
 
-    pub(crate) fn into_bsk(self) -> redpallas::SigningKey<Binding> {
+    /// Returns the signing key
+    pub fn into_bsk(self) -> redpallas::SigningKey<Binding> {
         // TODO: impl From<pallas::Scalar> for redpallas::SigningKey.
         self.0.to_repr().try_into().unwrap()
     }

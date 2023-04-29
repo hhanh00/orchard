@@ -77,7 +77,7 @@ impl Anchor {
 
 /// The Merkle path from a leaf of the note commitment tree
 /// to its anchor.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MerklePath {
     position: u32,
     auth_path: [MerkleHashOrchard; MERKLE_DEPTH_ORCHARD],
@@ -97,7 +97,7 @@ impl From<(incrementalmerkletree::Position, Vec<MerkleHashOrchard>)> for MerkleP
 
 impl MerklePath {
     /// Generates a dummy Merkle path for use in dummy spent notes.
-    pub(crate) fn dummy(mut rng: &mut impl RngCore) -> Self {
+    pub fn dummy(mut rng: &mut impl RngCore) -> Self {
         MerklePath {
             position: rng.next_u32(),
             auth_path: [(); MERKLE_DEPTH_ORCHARD]
