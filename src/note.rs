@@ -24,7 +24,8 @@ pub use self::nullifier::Nullifier;
 pub struct RandomSeed([u8; 32]);
 
 impl RandomSeed {
-    pub(crate) fn random(rng: &mut impl RngCore, rho: &Nullifier) -> Self {
+    /// Create a random random seed
+    pub fn random(rng: &mut impl RngCore, rho: &Nullifier) -> Self {
         loop {
             let mut bytes = [0; 32];
             rng.fill_bytes(&mut bytes);
