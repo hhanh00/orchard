@@ -24,6 +24,7 @@ use crate::{
     tree::{Anchor, MerklePath},
     value::{self, NoteValue, OverflowError, ValueCommitTrapdoor, ValueCommitment, ValueSum},
 };
+use crate::primitives::redpallas::SigningKey;
 
 const MIN_ACTIONS: usize = 2;
 
@@ -490,6 +491,16 @@ impl<P: fmt::Debug, S: InProgressSignatures> Authorization for InProgress<P, S> 
 #[derive(Clone, Debug)]
 pub struct Unproven {
     circuits: Vec<Circuit>,
+}
+
+impl InProgress<Unproven, Unauthorized> {
+    /// Create an empty authorization bundle (for testing)
+    pub fn empty() -> Self {
+        Self {
+            proof: Unproven { circuits: vec![] },
+            sigs: Unauthorized { bsk: SigningKey::<Binding>::try_from([0; 32]).unwrap() }
+        }
+    }
 }
 
 impl<S: InProgressSignatures> InProgress<Unproven, S> {
