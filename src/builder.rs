@@ -493,6 +493,16 @@ pub struct Unproven {
     circuits: Vec<Circuit>,
 }
 
+impl InProgress<Unproven, Unauthorized> {
+    /// Create an empty authorization bundle (for testing)
+    pub fn empty() -> Self {
+        Self {
+            proof: Unproven { circuits: vec![] },
+            sigs: Unauthorized { bsk: SigningKey::<Binding>::try_from([0; 32]).unwrap() }
+        }
+    }
+}
+
 impl<S: InProgressSignatures> InProgress<Unproven, S> {
     /// Creates the proof for this bundle.
     pub fn create_proof(
