@@ -249,6 +249,17 @@ impl Note {
             self.commitment(),
         )
     }
+
+    ///
+    pub fn nullifier_domain(&self, fvk: &FullViewingKey, domain: pallas::Base) -> Nullifier {
+        Nullifier::derive_domain(
+            fvk.nk(),
+            domain,
+            self.rho.0,
+            self.rseed.psi(&self.rho),
+            self.commitment(),
+        )
+    }
 }
 
 /// An encrypted note.
