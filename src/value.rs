@@ -264,6 +264,11 @@ impl ValueCommitTrapdoor {
         // TODO: impl From<pallas::Scalar> for redpallas::SigningKey.
         self.0.to_repr().try_into().unwrap()
     }
+
+    /// Serialize this value commitment trapdoor
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_repr()
+    }
 }
 
 /// A commitment to a [`ValueSum`].
@@ -322,6 +327,16 @@ impl ValueCommitment {
         };
 
         ValueCommitment(V * value + R * rcv.0)
+    }
+
+    /// Derives a `ValueCommitment` by $\mathsf{ValueCommit^{Orchard}}$.
+    /// with rcv = 0
+    ///
+    /// Defined in [Zcash Protocol Spec § 5.4.8.3: Homomorphic Pedersen commitments (Sapling and Orchard)][concretehomomorphiccommit].
+    ///
+    /// [concretehomomorphiccommit]: https://zips.z.cash/protocol/nu5.pdf#concretehomomorphiccommit
+    pub fn derive_from_value(value: i64) -> Self {
+        ValueCommitment::derive(ValueSum::from_raw(value), ValueCommitTrapdoor::zero())
     }
 
     pub(crate) fn into_bvk(self) -> redpallas::VerificationKey<Binding> {

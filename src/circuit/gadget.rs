@@ -24,7 +24,7 @@ use halo2_proofs::{
     plonk::{self, Advice, Assigned, Column},
 };
 
-pub(in crate::circuit) mod add_chip;
+pub(crate) mod add_chip;
 
 impl super::Config {
     pub(super) fn add_chip(&self) -> add_chip::AddChip {
@@ -77,7 +77,7 @@ impl super::Config {
 }
 
 /// An instruction set for adding two circuit words (field elements).
-pub(in crate::circuit) trait AddInstruction<F: Field>: Chip<F> {
+pub(crate) trait AddInstruction<F: Field>: Chip<F> {
     /// Constraints `a + b` and returns the sum.
     fn add(
         &self,
@@ -92,7 +92,7 @@ pub(in crate::circuit) trait AddInstruction<F: Field>: Chip<F> {
 /// Usages of this helper are technically superfluous, as the single-cell region is only
 /// ever used in equality constraints. We could eliminate them with a
 /// [write-on-copy abstraction](https://github.com/zcash/halo2/issues/334).
-pub(in crate::circuit) fn assign_free_advice<F: Field, V: Copy>(
+pub(crate) fn assign_free_advice<F: Field, V: Copy>(
     mut layouter: impl Layouter<F>,
     column: Column<Advice>,
     value: Value<V>,
@@ -109,7 +109,7 @@ where
 /// `ValueCommit^Orchard` from [Section 5.4.8.3 Homomorphic Pedersen commitments (Sapling and Orchard)].
 ///
 /// [Section 5.4.8.3 Homomorphic Pedersen commitments (Sapling and Orchard)]: https://zips.z.cash/protocol/protocol.pdf#concretehomomorphiccommit
-pub(in crate::circuit) fn value_commit_orchard<
+pub(crate) fn value_commit_orchard<
     EccChip: EccInstructions<
         pallas::Affine,
         FixedPoints = OrchardFixedBases,
@@ -145,7 +145,7 @@ pub(in crate::circuit) fn value_commit_orchard<
 ///
 /// [Section 4.16: Note Commitments and Nullifiers]: https://zips.z.cash/protocol/protocol.pdf#commitmentsandnullifiers
 #[allow(clippy::too_many_arguments)]
-pub(in crate::circuit) fn derive_nullifier<
+pub(crate) fn derive_nullifier<
     PoseidonChip: PoseidonSpongeInstructions<pallas::Base, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>,
     AddChip: AddInstruction<pallas::Base>,
     EccChip: EccInstructions<
@@ -199,5 +199,76 @@ pub(in crate::circuit) fn derive_nullifier<
         .map(|res| res.extract_p())
 }
 
-pub(in crate::circuit) use crate::circuit::commit_ivk::gadgets::commit_ivk;
-pub(in crate::circuit) use crate::circuit::note_commit::gadgets::note_commit;
+/// `DeriveNullifier` from [Section 4.16: Note Commitments and Nullifiers].
+///
+/// [Section 4.16: Note Commitments and Nullifiers]: https://zips.z.cash/protocol/protocol.pdf#commitmentsandnullifiers
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_domain_nullifier<
+    PoseidonChip: PoseidonSpongeInstructions<pallas::Base, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>,
+    AddChip: AddInstruction<pallas::Base>,
+    EccChip: EccInstructions<
+        pallas::Affine,
+        FixedPoints = OrchardFixedBases,
+        Var = AssignedCell<pallas::Base, pallas::Base>,
+    >,
+>(
+    mut layouter: impl Layouter<pallas::Base>,
+    poseidon_chip_1: PoseidonChip,
+    poseidon_chip_2: PoseidonChip,
+    add_chip: AddChip,
+    ecc_chip: EccChip,
+    domain: AssignedCell<pallas::Base, pallas::Base>,
+    rho: AssignedCell<pallas::Base, pallas::Base>,
+    psi: &AssignedCell<pallas::Base, pallas::Base>,
+    cm: &Point<pallas::Affine, EccChip>,
+    nk: AssignedCell<pallas::Base, pallas::Base>,
+) -> Result<X<pallas::Affine, EccChip>, plonk::Error> {
+    // domain_rho = poseidon_hash(domain, rho)
+    let domain_rho = {
+        let poseidon_message = [rho, domain];
+        let poseidon_hasher =
+            PoseidonHash::init(poseidon_chip_1, layouter.namespace(|| "Poseidon init"))?;
+        poseidon_hasher.hash(
+            layouter.namespace(|| "Poseidon hash (nk, rho)"),
+            poseidon_message,
+        )
+    }?;
+
+    // hash = poseidon_hash(nk, domain_rho)
+    let hash = {
+        let poseidon_message = [nk, domain_rho];
+        let poseidon_hasher =
+            PoseidonHash::init(poseidon_chip_2, layouter.namespace(|| "Poseidon init"))?;
+        poseidon_hasher.hash(
+            layouter.namespace(|| "Poseidon hash (nk, rho)"),
+            poseidon_message,
+        )
+    }?;
+
+    // Add hash output to psi.
+    // `scalar` = poseidon_hash(nk, rho) + psi.
+    let scalar = add_chip.add(
+        layouter.namespace(|| "scalar = poseidon_hash(nk, rho) + psi"),
+        &hash,
+        psi,
+    )?;
+
+    // Multiply scalar by NullifierK
+    // `product` = [poseidon_hash(nk, rho) + psi] NullifierK.
+    //
+    let product = {
+        let nullifier_k = FixedPointBaseField::from_inner(ecc_chip, NullifierK);
+        nullifier_k.mul(
+            layouter.namespace(|| "[poseidon_output + psi] NullifierK"),
+            scalar,
+        )?
+    };
+
+    // Add cm to multiplied fixed base to get nf
+    // cm + [poseidon_output + psi] NullifierK
+    cm.add(layouter.namespace(|| "nf"), &product)
+        .map(|res| res.extract_p())
+}
+
+pub(crate) use crate::circuit::commit_ivk::gadgets::commit_ivk;
+pub(crate) use crate::circuit::note_commit::gadgets::note_commit;

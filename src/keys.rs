@@ -20,9 +20,9 @@ use crate::{
     address::Address,
     primitives::redpallas::{self, SpendAuth},
     spec::{
-        commit_ivk, diversify_hash, extract_p, ka_orchard, ka_orchard_prepared, prf_nf, to_base,
-        to_scalar, NonIdentityPallasPoint, NonZeroPallasBase, NonZeroPallasScalar,
-        PreparedNonIdentityBase, PreparedNonZeroScalar, PrfExpand,
+        commit_ivk, diversify_hash, extract_p, ka_orchard, ka_orchard_prepared, prf_nf,
+        to_base, to_scalar, NonIdentityPallasPoint, NonZeroPallasBase,
+        NonZeroPallasScalar, PreparedNonIdentityBase, PreparedNonZeroScalar, PrfExpand,
     },
     zip32::{self, ChildIndex, ExtendedSpendingKey},
 };
@@ -229,6 +229,11 @@ impl From<&SpendingKey> for NullifierDerivingKey {
 impl NullifierDerivingKey {
     pub(crate) fn prf_nf(&self, rho: pallas::Base) -> pallas::Base {
         prf_nf(self.0, rho)
+    }
+
+    pub(crate) fn prf_nf_domain(&self, domain: pallas::Base, rho: pallas::Base) -> pallas::Base {
+        let domain_rho = prf_nf(domain, rho);
+        prf_nf(self.0, domain_rho)
     }
 
     /// Converts this nullifier deriving key to its serialized form.
