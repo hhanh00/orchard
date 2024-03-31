@@ -155,7 +155,7 @@ impl MerklePath {
 /// A newtype wrapper for leaves and internal nodes in the Orchard
 /// incremental note commitment tree.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MerkleHashOrchard(pallas::Base);
+pub struct MerkleHashOrchard(pub(crate) pallas::Base);
 
 impl MerkleHashOrchard {
     /// Creates an incremental tree leaf digest from the specified
