@@ -160,7 +160,7 @@ impl IntervalChip {
     }
 }
 
-const NUM_WORDS: usize = 24;
+const NUM_WORDS: usize = 25;
 
 #[derive(Clone)]
 struct TestCircuitConfig {
