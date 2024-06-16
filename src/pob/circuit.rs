@@ -217,12 +217,24 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             let nf_root = meta.query_advice(advices[6], Rotation::cur());
             let nf_anchor = meta.query_advice(advices[7], Rotation::cur());
 
+            // The constraint "nf_pos is even" checks that nf_start is the beginning
+            // of a nf interval (and not the end)
+            // However, it is technically not necessary because nf_end is
+            // the first item of the Merkle Authorization Path and therefore
+            // is the sibling of nf_start
+            // If nf_start were the end of the range, nf_end would be the beginning
+            // and the range check would fail
+            // For clarity, the constraint is still explicitly efforced by the circuit
+            let nf_pos = meta.query_advice(advices[8], Rotation::cur());
+            let nf_pos_half = meta.query_advice(advices[9], Rotation::cur());
+
             Constraints::with_selector(
                 q_orchard,
                 [
                     ("v_old = magnitude", v_old.clone() - magnitude),
                     ("root = anchor", root - anchor),
                     ("nf root = anchor", nf_root - nf_anchor),
+                    ("nf_pos is even", nf_pos - nf_pos_half.clone() - nf_pos_half),
                 ],
             )
         });
@@ -371,7 +383,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         let nf_interval = IntervalChip::construct(config.nf_interval_config.clone());
 
         // Witness private inputs that are used across multiple checks.
-        let (domain, psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, nf_start, nf_end) = {
+        let (domain, psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, nf_pos, nf_start, nf_end) = {
             let domain = layouter.assign_region(
                 || "copy domain",
                 |mut region| {
@@ -435,6 +447,13 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 self.v_old,
             )?;
 
+            // Witness nf_pos.
+            let nf_pos = assign_free_advice(
+                layouter.namespace(|| "witness nf_pos"),
+                config.advices[0],
+                self.nf_pos.map(|n| Fp::from(n as u64)),
+            )?;
+
             // Witness nf_start.
             let nf_start = assign_free_advice(
                 layouter.namespace(|| "witness nf_start"),
@@ -454,7 +473,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )?;
 
             (
-                domain, psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, nf_start, nf_end,
+                domain, psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, nf_pos, nf_start, nf_end,
             )
         };
 
@@ -663,7 +682,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         }
 
         // Range constraint on nf_old
-        nf_interval.check_in_interval(layouter.namespace(|| "nf in [nf_start, nf_end]"), 
+        nf_interval.check_in_interval(layouter.namespace(|| "nf in [nf_start, nf_end]"),
             nf_old.inner().clone(), nf_start, nf_end)?;
 
         // Constrain the remaining Orchard circuit checks.
@@ -683,6 +702,15 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     config.advices[3],
                     0,
                 )?;
+                nf_pos.copy_advice(
+                    || "nf_pos",
+                    &mut region,
+                    config.advices[8],
+                    0,
+                )?;
+                let nf_pos_half = self.nf_pos.map(|v| Fp::from((v / 2) as u64));
+                region.assign_advice(|| "half nf_pos", config.advices[9], 0,
+                    || nf_pos_half)?;
 
                 root.copy_advice(|| "calculated root", &mut region, config.advices[4], 0)?;
                 region.assign_advice_from_instance(
