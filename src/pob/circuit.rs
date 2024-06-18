@@ -8,7 +8,8 @@ use crate::{
     tree::{MerkleHashOrchard, MerklePath as MerklePathOrchard},
     value::ValueSum,
 };
-use ff::PrimeField;
+use blake2b_simd::Params;
+use ff::{FromUniformBytes, PrimeField};
 use group::{Curve, GroupEncoding};
 use halo2_proofs::{
     circuit::{floor_planner, Layouter, Value},
@@ -84,6 +85,17 @@ const RK_X: usize = 4;
 const RK_Y: usize = 5;
 const NF_ANCHOR: usize = 6;
 const DOMAIN: usize = 7;
+
+/// Hash the given info byte string to get the election domain
+pub fn domain(info: &[u8]) -> Fp {
+    let hash = Params::new()
+        .hash_length(64)
+        .personal(b"Zcash_WCV_domain")
+        .to_state()
+        .update(info)
+        .finalize();
+    Fp::from_uniform_bytes(hash.as_bytes().try_into().unwrap())
+}
 
 /// Configuration needed to use the Orchard Proof of Balance circuit.
 #[derive(Clone, Debug)]
@@ -996,6 +1008,8 @@ pub fn create_proof<R: RngCore + CryptoRng>(
     nf_path: MerklePathOrchard,
     nf_start: Fp,
     alpha: Fq,
+    cmx_root: Option<Anchor>,
+    nf_root: Option<Anchor>,
     mut rng: R,
 ) -> Result<ProofBalance, plonk::Error> {
     // Prepare the advices for the circuit
@@ -1004,6 +1018,12 @@ pub fn create_proof<R: RngCore + CryptoRng>(
     let cmx = note.commitment();
     let cmx = ExtractedNoteCommitment::from(cmx);
     let anchor = cmx_path.root(cmx);
+    if let Some(expected_cmx_root) = cmx_root {
+        if anchor != expected_cmx_root {
+            return Err(plonk::Error::InvalidInstances);
+        }
+    }
+    println!("cmx {:?}", anchor);
 
     let spend = SpendInfo::new(fvk.clone(), note.clone(), cmx_path).unwrap();
     let rsk = spauth.randomize(&alpha);
@@ -1014,6 +1034,12 @@ pub fn create_proof<R: RngCore + CryptoRng>(
     // proof of balance nullifier
     let domain_nf = note.nullifier_domain(&fvk, domain);
     let nf_anchor = nf_path.root(ExtractedNoteCommitment::from_bytes(&nf_start.to_repr()).unwrap());
+    println!("nf {:?}", nf_anchor);
+    if let Some(expected_nf_root) = nf_root {
+        if nf_anchor != expected_nf_root {
+            return Err(plonk::Error::InvalidInstances);
+        }
+    }
 
     let rcv = ValueCommitTrapdoor::random(&mut rng);
     let nf_circuit =
@@ -1062,6 +1088,8 @@ pub fn create_proof<R: RngCore + CryptoRng>(
             domain_nf,
             rk,
             proof,
+            cmx_root: anchor,
+            nf_root: nf_anchor,
         },
     };
     Ok(pb)
@@ -1071,17 +1099,15 @@ pub fn create_proof<R: RngCore + CryptoRng>(
 pub fn verify_proof(
     domain: Fp,
     proof: &ProofBalancePublic,
-    cmx_root: Fp,
-    nf_root: Fp,
 ) -> Result<(), plonk::Error> {
     let vk = VerifyingKey::build();
     let instance = Instance::from_parts(
         domain,
-        Anchor::from(cmx_root),
+        proof.cmx_root,
         proof.cv.clone(),
         proof.domain_nf,
         proof.rk.clone(),
-        Anchor::from(nf_root),
+        proof.nf_root,
     );
     proof.proof.verify(&vk, &[instance])?;
     Ok(())
@@ -1108,6 +1134,10 @@ pub struct ProofBalancePublic {
     pub rk: VerificationKey<SpendAuth>,
     /// ZKP
     pub proof: Proof,
+    /// Root of Nullifier Tree
+    pub cmx_root: Anchor,
+    /// Root of Note Commitment Tree
+    pub nf_root: Anchor,
 }
 
 /// Proof of Balance Package

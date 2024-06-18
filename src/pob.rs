@@ -3,7 +3,7 @@ mod circuit;
 mod interval;
 
 pub use circuit::{
-    create_proof, verify_proof, {Proof, ProofBalance, ProofBalancePublic},
+    domain, create_proof, verify_proof, {Proof, ProofBalance, ProofBalancePublic},
 };
 
 use crate::tree::MerkleHashOrchard;
