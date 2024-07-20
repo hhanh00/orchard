@@ -35,11 +35,13 @@ impl Address {
         self.d
     }
 
-    pub(crate) fn g_d(&self) -> NonIdentityPallasPoint {
+    /// 
+    pub fn g_d(&self) -> NonIdentityPallasPoint {
         diversify_hash(self.d.as_array())
     }
 
-    pub(crate) fn pk_d(&self) -> &DiversifiedTransmissionKey {
+    ///
+    pub fn pk_d(&self) -> &DiversifiedTransmissionKey {
         &self.pk_d
     }
 

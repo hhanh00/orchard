@@ -1,6 +1,7 @@
 //! Proof of Balance
 mod circuit;
 mod interval;
+mod paillier;
 
 pub use circuit::{
     domain, create_proof, verify_proof, {Proof, ProofBalance, ProofBalancePublic},

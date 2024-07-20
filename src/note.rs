@@ -69,7 +69,7 @@ impl RandomSeed {
     /// Defined in [Zcash Protocol Spec § 4.7.3: Sending Notes (Orchard)][orchardsend].
     ///
     /// [orchardsend]: https://zips.z.cash/protocol/nu5.pdf#orchardsend
-    fn esk(&self, rho: &Nullifier) -> NonZeroPallasScalar {
+    pub fn esk(&self, rho: &Nullifier) -> NonZeroPallasScalar {
         // We can't construct a RandomSeed for which this unwrap fails.
         self.esk_inner(rho).unwrap()
     }
@@ -200,7 +200,7 @@ impl Note {
     }
 
     /// Derives the ephemeral secret key for this note.
-    pub(crate) fn esk(&self) -> EphemeralSecretKey {
+    pub fn esk(&self) -> EphemeralSecretKey {
         EphemeralSecretKey(self.rseed.esk(&self.rho))
     }
 
