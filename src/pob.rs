@@ -1,6 +1,6 @@
 //! Proof of Balance
 mod circuit;
-mod interval;
+pub mod interval;
 mod paillier;
 
 pub use circuit::{

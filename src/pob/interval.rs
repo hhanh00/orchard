@@ -1,3 +1,4 @@
+//!
 use ff::Field;
 use halo2_gadgets::utilities::lookup_range_check::LookupRangeCheckConfig;
 use halo2_proofs::{
@@ -12,6 +13,7 @@ use pasta_curves::Fp;
 
 use crate::constants::sinsemilla::K;
 
+///
 #[derive(Clone, Debug)]
 pub struct IntervalChipConfig {
     s_interval: Selector,
@@ -24,6 +26,8 @@ pub struct IntervalChipConfig {
 
 impl IntervalChipConfig {}
 
+///
+#[derive(Clone, Debug)]
 pub struct IntervalChip {
     config: IntervalChipConfig,
 }
@@ -43,6 +47,7 @@ impl Chip<Fp> for IntervalChip {
 }
 
 impl IntervalChip {
+    ///
     pub fn configure(
         meta: &mut ConstraintSystem<Fp>,
         a: Column<Advice>,
@@ -88,10 +93,12 @@ impl IntervalChip {
         }
     }
 
+    ///
     pub fn construct(config: IntervalChipConfig) -> IntervalChip {
         IntervalChip { config }
     }
 
+    ///
     pub fn load(
         &self,
         mut layouter: impl Layouter<Fp>,
@@ -114,6 +121,7 @@ impl IntervalChip {
         )
     }
 
+    ///
     pub fn check_in_interval(
         &self,
         mut layouter: impl halo2_proofs::circuit::Layouter<Fp>,
