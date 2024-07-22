@@ -1,5 +1,5 @@
 //!
-use ff::Field;
+use ff::{Field, PrimeField};
 use halo2_gadgets::utilities::lookup_range_check::LookupRangeCheckConfig;
 use halo2_proofs::{
     circuit::{AssignedCell, Chip, Layouter, SimpleFloorPlanner, Value},
@@ -9,19 +9,36 @@ use halo2_proofs::{
     },
     poly::Rotation,
 };
-use pasta_curves::Fp;
+use pasta_curves::pallas::Base as Fp;
 
-use crate::constants::sinsemilla::K;
+use super::logical::{IsZeroChip, IsZeroChipConfig};
+
+// RANGES MUST BE LESS THAN 252 BITS WIDE
+
+// We use a max range of 252 bits even though the Fp
+// has a capacity of 254 bits
+// K * NUM_WORDS <= Fp::CAPACITY (254)
+// and K <= 10
+// The only possibility is K = 2 and NUM_WORDS = 127
+// which has a lot of words
+// In practice 252 bits works fine because we are testing
+// against ranges of nullifiers
+// Given more than 2^10 nullifiers, ranges are going to be
+// less than 244 bits wide
+const K: usize = 9;
+const NUM_WORDS: usize = 28;
 
 ///
 #[derive(Clone, Debug)]
 pub struct IntervalChipConfig {
     s_interval: Selector,
+    s_and: Selector,
     a: Column<Advice>,
     b: Column<Advice>,
     c: Column<Advice>,
     table_idx: TableColumn,
     range_config: LookupRangeCheckConfig<Fp, K>,
+    is_zero_config: IsZeroChipConfig,
 }
 
 impl IntervalChipConfig {}
@@ -59,6 +76,7 @@ impl IntervalChip {
         meta.enable_equality(b);
         meta.enable_equality(c);
         let s_interval = meta.selector();
+        let s_and = meta.selector();
         // low      | high        | element
         // 2^M      | y=high-low  | x=element - low
         // 2^M-y+x-1|
@@ -80,16 +98,31 @@ impl IntervalChip {
                 ],
             )
         });
+        meta.create_gate("and", |meta| {
+            let s_and = meta.query_selector(s_and);
+            let a = meta.query_advice(a.clone(), Rotation::cur());
+            let b = meta.query_advice(b.clone(), Rotation::cur());
+            let c = meta.query_advice(c.clone(), Rotation::cur());
+            Constraints::with_selector(
+                s_and,
+                [
+                    c - a * b,
+                ],
+            )
+        });
 
         let range_config = LookupRangeCheckConfig::configure(meta, b, table_idx);
-
+        let is_zero_config = IsZeroChip::configure(meta, 
+            a, b, c);
         IntervalChipConfig {
             s_interval,
+            s_and,
             a,
             b,
             c,
             table_idx,
             range_config,
+            is_zero_config,
         }
     }
 
@@ -128,9 +161,10 @@ impl IntervalChip {
         e: AssignedCell<Fp, Fp>,
         low: AssignedCell<Fp, Fp>,
         high: AssignedCell<Fp, Fp>,
-    ) -> Result<(), Error> {
+    ) -> Result<AssignedCell<Fp, Fp>, Error> {
         let m = NUM_WORDS * K;
         let config = &self.config;
+        let is_zero_chip = IsZeroChip::construct(config.is_zero_config.clone());
         let (x, x_shifted) = layouter.assign_region(
             || "check interval",
             |mut region| {
@@ -154,21 +188,33 @@ impl IntervalChip {
             },
         )?;
 
-        config
+        let c1 = config
             .range_config
-            .copy_check(layouter.namespace(|| "x < 2^M"), x, NUM_WORDS, true)?;
-        config.range_config.copy_check(
+            .copy_check(layouter.namespace(|| "x < 2^M"), x, NUM_WORDS, false)?;
+        let c1 = c1.last().unwrap();
+        let c1 = is_zero_chip.is_zero(layouter.namespace(|| "c1 <- !c1"), c1.clone())?;
+
+        let c2 = config.range_config.copy_check(
             layouter.namespace(|| "x_shifted < 2^M"),
             x_shifted,
             NUM_WORDS,
-            true,
+            false,
         )?;
+        let c2 = c2.last().unwrap();
+        let c2 = is_zero_chip.is_zero(layouter.namespace(|| "c2 <- !c2"), c2.clone())?;
 
-        Ok(())
+        let success = layouter.assign_region(|| "c1 && c2", |mut region| {
+            config.s_and.enable(&mut region, 0)?;
+            c1.copy_advice(|| "c1", &mut region, config.a, 0)?;
+            c2.copy_advice(|| "c2", &mut region, config.b, 0)?;
+            let c1_c2 = c1.value().zip(c2.value()).map(|(c1, c2)| c1 * c2);
+            let success = region.assign_advice(|| "c1 and c2", config.c, 0, || c1_c2)?;
+            Ok(success)
+        })?;
+
+        Ok(success)
     }
 }
-
-const NUM_WORDS: usize = 25;
 
 #[derive(Clone)]
 struct TestCircuitConfig {

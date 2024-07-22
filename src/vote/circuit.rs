@@ -3,7 +3,7 @@
 use group::{Curve, GroupEncoding};
 use halo2_proofs::{
     circuit::{floor_planner, Layouter, Value},
-    plonk::{self, Advice, Column, Constraints, Instance as InstanceColumn, Selector},
+    plonk::{self, Advice, Column, Constraints, Expression, Instance as InstanceColumn, Selector},
     poly::Rotation,
 };
 use pasta_curves::{arithmetic::CurveAffine, pallas, vesta};
@@ -300,6 +300,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             let nf_pos = meta.query_advice(advices[8], Rotation::cur());
             let nf_pos_half = meta.query_advice(advices[9], Rotation::cur());
 
+            let nf_in_range = meta.query_advice(advices[0], Rotation::next());
+            let one = Expression::Constant(pallas::Base::one());
+
             Constraints::with_selector(
                 q_orchard,
                 [
@@ -314,6 +317,10 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     (
                         "Either v_old = 0, or nf root = anchor",
                         v_old.clone() * (nf_root - nf_anchor),
+                    ),
+                    (
+                        "Either v_old = 0, or nf_in_range",
+                        v_old.clone() * (one - nf_in_range),
                     ),
                     ("nf_pos is even", nf_pos - nf_pos_half.clone() - nf_pos_half),
                 ],
@@ -665,8 +672,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )?;
 
             // Constrain cv_net to equal public input
-            // layouter.constrain_instance(cv_net.inner().x().cell(), config.primary, CV_NET_X)?;
-            // layouter.constrain_instance(cv_net.inner().y().cell(), config.primary, CV_NET_Y)?;
+            layouter.constrain_instance(cv_net.inner().x().cell(), config.primary, CV_NET_X)?;
+            layouter.constrain_instance(cv_net.inner().y().cell(), config.primary, CV_NET_Y)?;
 
             // Return the magnitude and sign so we can use them in the Orchard gate.
             v_net_magnitude_sign
@@ -864,7 +871,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         }
 
         // Range constraint on nf_old
-        nf_interval.check_in_interval(
+        let nf_in_range = nf_interval.check_in_interval(
             layouter.namespace(|| "nf in [nf_start, nf_end]"),
             nf_old.inner().clone(),
             nf_start,
@@ -910,6 +917,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 nf_pos.copy_advice(|| "nf_pos", &mut region, config.advices[8], 0)?;
                 let nf_pos_half = self.nf_pos.map(|v| pallas::Base::from((v / 2) as u64));
                 region.assign_advice(|| "half nf_pos", config.advices[9], 0, || nf_pos_half)?;
+
+                nf_in_range.copy_advice(|| "nf_in_range", &mut region, config.advices[0], 1)?;
 
                 config.q_orchard.enable(&mut region, 0)?;
                 Ok(())
@@ -1004,10 +1013,15 @@ mod tests {
     use zcash_note_encryption::OUT_CIPHERTEXT_SIZE;
 
     use crate::{
-        keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey}, note::{RandomSeed, TransmittedNoteCiphertext}, note_encryption::OrchardNoteEncryption, tree::MerklePath, vote::{
+        keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
+        note::{RandomSeed, TransmittedNoteCiphertext},
+        note_encryption::OrchardNoteEncryption,
+        tree::MerklePath,
+        vote::{
             path::{calculate_merkle_paths, make_nf_leaves},
             proof::{Proof, ProvingKey, VerifyingKey},
-        }, Action
+        },
+        Action,
     };
 
     use super::*;
@@ -1057,9 +1071,9 @@ mod tests {
     #[test]
     fn f() -> Result<(), Box<dyn std::error::Error>> {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
-        let sk = SpendingKey::random(&mut rng);
-        let fvk = FullViewingKey::from(&sk);
-        let voter_address = fvk.address_at(0u64, Scope::External);
+        let voter_sk = SpendingKey::random(&mut rng);
+        let voter_fvk = FullViewingKey::from(&voter_sk);
+        let voter_address = voter_fvk.address_at(0u64, Scope::External);
 
         let domain = ElectionDomain(Fp::random(&mut rng));
         let mut notes = vec![];
@@ -1084,8 +1098,8 @@ mod tests {
 
         const N_CANDIDATES: usize = 2;
 
-        let (mut nfs, mut my_notes) = filter_notes(&notes, &fvk, |idx, _| {
-            if idx % 50 == 0 {
+        let (mut nfs, mut my_notes) = filter_notes(&notes, &voter_fvk, |idx, _| {
+            if idx % 20 == 0 {
                 NoteType::Ours
             } else if idx % 3 == 0 {
                 NoteType::Spent
@@ -1117,7 +1131,7 @@ mod tests {
 
         let my_nfs: Vec<_> = my_notes
             .iter()
-            .map(|n| notes[n.idx].nullifier(&fvk))
+            .map(|n| notes[n.idx].nullifier(&voter_fvk))
             .collect();
 
         nfs.sort();
@@ -1148,11 +1162,11 @@ mod tests {
         let vk = VerifyingKey::<Circuit>::build();
         for c in 0..n_actions {
             println!("{}", c);
-            let (_, dummy_fvk, dummy_spend) = Note::dummy(&mut rng, None);
-            let (spend_fvk, spend) = if c < my_notes.len() {
-                (&fvk, &notes[my_notes[c].idx])
+            let (dummy_sk, dummy_fvk, dummy_spend) = Note::dummy(&mut rng, None);
+            let (spend_sk, spend_fvk, spend) = if c < my_notes.len() {
+                (&voter_sk, &voter_fvk, &notes[my_notes[c].idx])
             } else {
-                (&dummy_fvk, &dummy_spend)
+                (&dummy_sk, &dummy_fvk, &dummy_spend)
             };
             let domain_nf = spend.nullifier_domain(spend_fvk, domain.0);
 
@@ -1168,7 +1182,7 @@ mod tests {
             let cv_net = ValueCommitment::derive(value_net, rcv.clone());
 
             let alpha = Fq::random(&mut rng);
-            let spk = SpendAuthorizingKey::from(&sk);
+            let spk = SpendAuthorizingKey::from(spend_sk);
             let rk = spk.randomize(&alpha);
             let rk = VerificationKey::<SpendAuth>::from(&rk);
             let cmx = output.commitment();
@@ -1211,8 +1225,7 @@ mod tests {
             } else {
                 MerklePath::dummy(&mut rng)
             };
-            let spend_info =
-                SpendInfo::new(spend_fvk.clone(), spend.clone(), cmx_path).unwrap();
+            let spend_info = SpendInfo::new(spend_fvk.clone(), spend.clone(), cmx_path).unwrap();
             let output_note = output.clone();
 
             assert!(spend.nullifier(spend_fvk) == output_note.rho());

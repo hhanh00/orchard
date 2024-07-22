@@ -240,6 +240,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             let nf_pos = meta.query_advice(advices[8], Rotation::cur());
             let nf_pos_half = meta.query_advice(advices[9], Rotation::cur());
 
+            let in_range = meta.query_advice(advices[0], Rotation::next());
+
             Constraints::with_selector(
                 q_orchard,
                 [
@@ -694,7 +696,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         }
 
         // Range constraint on nf_old
-        nf_interval.check_in_interval(layouter.namespace(|| "nf in [nf_start, nf_end]"),
+        let nf_in_range = nf_interval.check_in_interval(layouter.namespace(|| "nf in [nf_start, nf_end]"),
             nf_old.inner().clone(), nf_start, nf_end)?;
 
         // Constrain the remaining Orchard circuit checks.
@@ -741,6 +743,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     config.advices[7],
                     0,
                 )?;
+                nf_in_range.copy_advice(|| "nf_in_range", &mut region, config.advices[0], 1)?;
 
                 config.q_orchard.enable(&mut region, 0)
             },
