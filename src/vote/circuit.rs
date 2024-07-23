@@ -76,6 +76,20 @@ pub struct VotePowerInfo {
     nf_path: crate::tree::MerklePath,
 }
 
+impl VotePowerInfo {
+    pub fn from_parts(
+        domain_nf: Nullifier,
+        nf_start: Nullifier,
+        nf_path: crate::tree::MerklePath,
+    ) -> Self {
+        VotePowerInfo {
+            domain_nf,
+            nf_start,
+            nf_path,
+        }
+    }
+}
+
 /// Configuration needed to use the Orchard Action circuit.
 #[derive(Clone, Debug)]
 pub struct Config {

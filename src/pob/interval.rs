@@ -162,6 +162,7 @@ impl IntervalChip {
         low: AssignedCell<Fp, Fp>,
         high: AssignedCell<Fp, Fp>,
     ) -> Result<AssignedCell<Fp, Fp>, Error> {
+        // println!("interval {:?} {:?} {:?}", e.value(), low.value(), high.value());
         let m = NUM_WORDS * K;
         let config = &self.config;
         let is_zero_chip = IsZeroChip::construct(config.is_zero_config.clone());

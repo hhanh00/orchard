@@ -109,5 +109,36 @@ pub fn make_nf_leaves(nfs: &[Nullifier], my_nfs: &[Nullifier]) -> (Vec<Hash>, Ve
         leaves.push(a);
         leaves.push(b);
     }
+    for l in leaves.iter() {
+        println!("{:?}", l);
+    }
     (leaves.iter().map(|v| v.to_repr()).collect(), nfs_pos)
+}
+
+pub fn nf_leaves(nfs: &[Nullifier]) -> Vec<Nullifier> {
+    let mut prev = Fp::zero();
+    let mut leaves = vec![];
+    for (pos, r) in nfs.iter().enumerate() {
+        let r = r.0;
+        // Skip empty ranges when nullifiers are consecutive
+        // (with statistically negligible odds)
+        if prev < r {
+            // Ranges are inclusive of both ends
+            let a = prev;
+            let b = r - Fp::one();
+
+            leaves.push(Nullifier(a));
+            leaves.push(Nullifier(b));
+        }
+        prev = r + Fp::one();
+    }
+    if prev != Fp::zero() {
+        // overflow when a nullifier == max
+        let a = prev;
+        let b = Fp::one().neg();
+
+        leaves.push(Nullifier(a));
+        leaves.push(Nullifier(b));
+    }
+    leaves
 }

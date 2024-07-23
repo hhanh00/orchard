@@ -10,4 +10,6 @@ const DEPTH: usize = 32;
 
 ///
 #[derive(Clone, Debug)]
-pub struct Election {}
+pub struct Election {
+    name: String,
+}
