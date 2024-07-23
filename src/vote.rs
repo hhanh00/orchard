@@ -1,6 +1,7 @@
 //! Proof of Balance
 mod path;
 mod circuit;
+mod count;
 mod proof;
 mod builder;
 
