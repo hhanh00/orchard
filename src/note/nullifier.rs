@@ -75,6 +75,11 @@ impl Nullifier {
             &(k * mod_r_p(nk.prf_nf_domain(rho, domain) + psi) + cm.0),
         ))
     }
+
+    ///
+    pub fn empty() -> Self {
+        Nullifier(pallas::Base::zero())
+    }
 }
 
 /// Generators for property testing.

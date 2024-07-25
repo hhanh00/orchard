@@ -115,10 +115,11 @@ pub fn make_nf_leaves(nfs: &[Nullifier], my_nfs: &[Nullifier]) -> (Vec<Hash>, Ve
     (leaves.iter().map(|v| v.to_repr()).collect(), nfs_pos)
 }
 
-pub fn nf_leaves(nfs: &[Nullifier]) -> Vec<Nullifier> {
+///
+pub fn build_nf_ranges(nfs: impl IntoIterator<Item=Nullifier>) -> Vec<Nullifier> {
     let mut prev = Fp::zero();
     let mut leaves = vec![];
-    for (pos, r) in nfs.iter().enumerate() {
+    for r in nfs {
         let r = r.0;
         // Skip empty ranges when nullifiers are consecutive
         // (with statistically negligible odds)

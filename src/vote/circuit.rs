@@ -1034,7 +1034,7 @@ mod tests {
         tree::MerklePath,
         vote::{
             path::{calculate_merkle_paths, make_nf_leaves},
-            proof::{Proof, ProvingKey, VerifyingKey},
+            proof::{ProvingKey, VerifyingKey},
         },
         Action,
     };
@@ -1047,19 +1047,19 @@ mod tests {
         Others,
     }
 
-    struct MyNote {
+    struct VoteNote {
         idx: usize,
         nf: Nullifier,
         nf_start: Nullifier,
         nf_path: MerklePath,
         cmx_path: MerklePath,
     }
-
+    
     fn filter_notes<F>(
         notes: &[Note],
         fvk: &FullViewingKey,
         filter: F,
-    ) -> (Vec<Nullifier>, Vec<MyNote>)
+    ) -> (Vec<Nullifier>, Vec<VoteNote>)
     where
         F: Fn(usize, &Note) -> NoteType,
     {
@@ -1068,7 +1068,7 @@ mod tests {
         for (idx, n) in notes.iter().enumerate() {
             match filter(idx, n) {
                 NoteType::Ours => {
-                    ours.push(MyNote {
+                    ours.push(VoteNote {
                         idx,
                         nf: n.nullifier(fvk),
                         nf_start: Nullifier(Fp::ZERO),
@@ -1173,8 +1173,8 @@ mod tests {
         let entropy = [0u8; 32];
         let n_actions = my_notes.len().max(N_CANDIDATES as usize);
         println!("{} {} {}", my_notes.len(), N_CANDIDATES, n_actions);
-        let pk = ProvingKey::<Circuit>::build();
-        let vk = VerifyingKey::<Circuit>::build();
+        let _pk = ProvingKey::<Circuit>::build();
+        let _vk = VerifyingKey::<Circuit>::build();
         for c in 0..n_actions {
             println!("{}", c);
             let (dummy_sk, dummy_fvk, dummy_spend) = Note::dummy(&mut rng, None);

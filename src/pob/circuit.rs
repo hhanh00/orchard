@@ -240,8 +240,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             let nf_pos = meta.query_advice(advices[8], Rotation::cur());
             let nf_pos_half = meta.query_advice(advices[9], Rotation::cur());
 
-            let in_range = meta.query_advice(advices[0], Rotation::next());
-
             Constraints::with_selector(
                 q_orchard,
                 [

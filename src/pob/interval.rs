@@ -1,5 +1,5 @@
 //!
-use ff::{Field, PrimeField};
+use ff::Field;
 use halo2_gadgets::utilities::lookup_range_check::LookupRangeCheckConfig;
 use halo2_proofs::{
     circuit::{AssignedCell, Chip, Layouter, SimpleFloorPlanner, Value},
