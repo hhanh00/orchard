@@ -70,6 +70,7 @@ const CMX: usize = 6;
 const NF_ANCHOR: usize = 7;
 const DOMAIN: usize = 8;
 
+#[derive(Debug)]
 pub struct VotePowerInfo {
     domain_nf: Nullifier,
     nf_start: Nullifier,

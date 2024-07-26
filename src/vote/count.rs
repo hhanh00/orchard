@@ -1,6 +1,9 @@
 //! The Orchard Action circuit implementation.
 
-use super::Hash;
+use super::{
+    proof::{ProvingKey, VerifyingKey},
+    Hash,
+};
 use blake2b_simd::Params;
 use group::Curve;
 use halo2_proofs::{
@@ -19,7 +22,10 @@ use crate::{
             assign_free_advice, note_commit, value_commit_orchard,
         },
         note_commit::{NoteCommitChip, NoteCommitConfig},
-    }, primitives::redpallas::{Binding, SigningKey}, value::ValueSum
+    },
+    primitives::redpallas::{Binding, Signature, SigningKey, VerificationKey},
+    value::ValueSum,
+    vote::proof::Proof,
 };
 use crate::{
     constants::{OrchardCommitDomains, OrchardFixedBases, OrchardHashDomains},
@@ -465,25 +471,34 @@ pub struct VoteCount {
     pub cmx: Hash,
 }
 
+///
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CandidateCount {
+    ///
     pub candidate: Vec<u8>,
+    ///
     pub total_vote: u64,
     pub votes: Vec<VoteCount>,
 }
 
 impl CandidateCount {
     pub fn sig_hash(&self) -> Hash {
-        let bin_data = bincode::serialize(&self).unwrap();
-        let p = Params::new().hash_length(32).personal(b"Ballot_____Count")
-        .hash(&bin_data);
+        let bin_data = serde_cbor::to_vec(&self).unwrap();
+        let p = Params::new()
+            .hash_length(32)
+            .personal(b"Ballot_____Count")
+            .hash(&bin_data);
         p.as_bytes().try_into().unwrap()
     }
 
-    pub fn binding_sign<R: RngCore + CryptoRng>(&self, rcv: ValueCommitTrapdoor, mut rng: R) -> Vec<u8> {
+    pub fn binding_sign<R: RngCore + CryptoRng>(
+        &self,
+        rcv: ValueCommitTrapdoor,
+        mut rng: R,
+    ) -> Vec<u8> {
         let bsk: SigningKey<Binding> = rcv.to_bytes().try_into().unwrap();
         let sig_hash = self.sig_hash();
-    
+
         let binding_signature = bsk.sign(&mut rng, sig_hash.as_ref());
         let binding_signature: [u8; 64] = (&binding_signature).into();
         binding_signature.to_vec()
@@ -491,21 +506,65 @@ impl CandidateCount {
 }
 
 ///
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CandidateCountEnvelope {
+    ///
+    pub data: CandidateCount,
+    ///
+    pub binding_signature: Vec<u8>,
+    ///
+    pub proofs: Vec<Vec<u8>>,
+}
+
+impl CandidateCountEnvelope {
+    pub fn verify(self, vk: &VerifyingKey<Circuit>) -> Result<CandidateCount, Error> {
+        let mut address = [0u8; 43];
+        address.copy_from_slice(&self.data.candidate);
+        let address = Address::from_raw_address_bytes(&address).unwrap();
+        for (vc, p) in self.data.votes.iter().zip(self.proofs.iter()) {
+            let proof = Proof::<Circuit>::new(p.clone());
+            let cv = ValueCommitment::from_bytes(&vc.cv).unwrap();
+            let cmx = ExtractedNoteCommitment::from_bytes(&vc.cmx).unwrap();
+            let instance = Instance::from_parts(cv, cmx, address);
+            proof.verify(vk, &[instance])?;
+        }
+
+        let sig_hash = self.data.sig_hash();
+        let signature: [u8; 64] = self.binding_signature.clone().try_into().unwrap();
+        let signature = Signature::<Binding>::from(signature);
+        let cv = self.data
+            .votes
+            .iter()
+            .map(|vc| ValueCommitment::from_bytes(&vc.cv).unwrap())
+            .sum::<ValueCommitment>()
+            - ValueCommitment::derive_from_value(self.data.total_vote as i64);
+        let pk: VerificationKey<Binding> = cv.to_bytes().try_into().unwrap();
+        pk.verify(&sig_hash, &signature).map_err(|_| Error::ConstraintSystemFailure)?;
+        Ok(self.data)
+    }
+}
+
+///
 #[derive(Debug)]
-pub struct CountBuilder {
+pub struct CountBuilder<'a> {
+    pk: &'a ProvingKey<Circuit>,
+    vk: &'a VerifyingKey<Circuit>,
     candidate: Address,
     rcv: ValueCommitTrapdoor,
     total_value: u64,
     votes: Vec<VoteCount>,
+    proofs: Vec<Vec<u8>>,
 }
 
-impl CountBuilder {
-    pub fn new(candidate: Address) -> Self {
+impl <'a> CountBuilder<'a> {
+    pub fn new(candidate: Address, pk: &'a ProvingKey<Circuit>, vk: &'a VerifyingKey<Circuit>) -> Self {
         CountBuilder {
+            pk, vk,
             candidate,
             rcv: ValueCommitTrapdoor::zero(),
             total_value: 0,
             votes: vec![],
+            proofs: vec![],
         }
     }
 
@@ -534,19 +593,34 @@ impl CountBuilder {
             vote.rseed.clone(),
             rcv,
         );
-        let instance = instance.to_halo2_instance();
-        let prover = MockProver::run(K, &circuit, vec![instance]).unwrap();
+        let fp_instance = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![fp_instance]).unwrap();
         prover.verify().unwrap();
+
+        let proof = Proof::<Circuit>::create(
+            self.pk,
+            &[circuit],
+            std::slice::from_ref(&instance),
+            &mut rng,
+        )?;
+
+        proof.verify(self.vk, &[instance])?;
+        self.proofs.push(proof.as_ref().to_vec());
         Ok(())
     }
 
-    pub fn build(self) -> (CandidateCount, ValueCommitTrapdoor) {
-        let cc = CandidateCount {
+    pub fn build<R: RngCore + CryptoRng>(self, mut rng: R) -> CandidateCountEnvelope {
+        let data: CandidateCount = CandidateCount {
             candidate: self.candidate.to_raw_address_bytes().to_vec(),
             total_vote: self.total_value,
             votes: self.votes,
         };
-        (cc, self.rcv)
+        let binding_signature: [u8; 64] = data.binding_sign(self.rcv, &mut rng).try_into().unwrap();
+        CandidateCountEnvelope {
+            data,
+            binding_signature: binding_signature.to_vec(),
+            proofs: self.proofs,
+        }
     }
 }
 
@@ -555,27 +629,24 @@ mod tests {
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 
-    use crate::{primitives::redpallas::{Signature, VerificationKey}, vote::encryption::DecryptedVote};
+    use crate::{
+        primitives::redpallas::{Signature, VerificationKey},
+        vote::encryption::DecryptedVote,
+    };
 
     use super::*;
 
     #[test]
-    fn note_decryption_tally() {
+    fn f() {
         let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
         let vote = DecryptedVote::random(&mut rng);
-        let mut builder = CountBuilder::new(vote.address);
+        let pk = ProvingKey::<Circuit>::build();
+        let vk = VerifyingKey::<Circuit>::build();
+        let mut builder = CountBuilder::new(vote.address, &pk, &vk);
         builder.add_vote(&vote, &mut rng).unwrap();
-        let (cc, rcv) = builder.build();
-        println!("{:?}", cc);
+        let count = builder.build(&mut rng);
 
-        let signature: [u8; 64] = cc.binding_sign(rcv, &mut rng).try_into().unwrap();
-
-        println!("signature {}", hex::encode(&signature));
-        let sig_hash = cc.sig_hash();
-        let signature = Signature::<Binding>::from(signature);
-        let cv = cc.votes.iter().map(|vc| ValueCommitment::from_bytes(&vc.cv).unwrap()).sum::<ValueCommitment>()
-            - ValueCommitment::derive_from_value(cc.total_vote as i64);
-        let pk: VerificationKey<Binding> = cv.to_bytes().try_into().unwrap();
-        pk.verify(&sig_hash, &signature).unwrap();
+        let c = count.verify(&vk).unwrap();
+        println!("{} {}", hex::encode(&c.candidate), c.total_vote);
     }
 }

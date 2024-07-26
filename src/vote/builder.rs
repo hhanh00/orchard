@@ -1,8 +1,6 @@
-use std::error::Error;
-
 use blake2b_simd::Params;
 use ff::{Field, PrimeField};
-use halo2_proofs::dev::MockProver;
+use halo2_proofs::{dev::MockProver, plonk::Error};
 use pasta_curves::pallas::{Base as Fp, Scalar as Fq};
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -15,10 +13,13 @@ use crate::{
     keys::{FullViewingKey, PreparedIncomingViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, TransmittedNoteCiphertext},
     note_encryption::{OrchardDomain, OrchardNoteEncryption},
-    primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey},
+    primitives::redpallas::{Binding, Signature, SigningKey, SpendAuth, VerificationKey},
     tree::{MerkleHashOrchard, MerklePath},
     value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
-    vote::circuit::{Circuit, ElectionDomain, Instance, VotePowerInfo},
+    vote::{
+        circuit::{Circuit, ElectionDomain, Instance, VotePowerInfo},
+        proof::{Proof, ProvingKey, VerifyingKey},
+    },
     Address, Anchor, Note,
 };
 
@@ -85,16 +86,22 @@ pub struct BallotData {
 
 impl BallotData {
     pub fn sig_hash(&self) -> Hash {
-        let bin_data = bincode::serialize(&self).unwrap();
-        let p = Params::new().hash_length(32).personal(b"Ballot______Data")
-        .hash(&bin_data);
+        let bin_data = serde_cbor::to_vec(&self).unwrap();
+        let p = Params::new()
+            .hash_length(32)
+            .personal(b"Ballot______Data")
+            .hash(&bin_data);
         p.as_bytes().try_into().unwrap()
     }
 
-    pub fn binding_sign<R: RngCore + CryptoRng>(&self, rcv: ValueCommitTrapdoor, mut rng: R) -> Vec<u8> {
+    pub fn binding_sign<R: RngCore + CryptoRng>(
+        &self,
+        rcv: ValueCommitTrapdoor,
+        mut rng: R,
+    ) -> Vec<u8> {
         let bsk: SigningKey<Binding> = rcv.to_bytes().try_into().unwrap();
         let sig_hash = self.sig_hash();
-    
+
         let binding_signature = bsk.sign(&mut rng, sig_hash.as_ref());
         let binding_signature: [u8; 64] = (&binding_signature).into();
         binding_signature.to_vec()
@@ -102,8 +109,79 @@ impl BallotData {
 }
 
 ///
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BallotEnvelope {
+    ///
+    pub data: BallotData,
+    ///
+    pub binding_signature: Vec<u8>,
+    ///
+    pub proofs: Vec<Vec<u8>>,
+}
+
+impl BallotEnvelope {
+    pub fn build<R: RngCore + CryptoRng>(
+        data: BallotData,
+        rcv: ValueCommitTrapdoor,
+        proofs: Vec<Vec<u8>>,
+        mut rng: R,
+    ) -> Self {
+        let binding_signature: [u8; 64] = data.binding_sign(rcv, &mut rng).try_into().unwrap();
+        BallotEnvelope {
+            data,
+            binding_signature: binding_signature.to_vec(),
+            proofs,
+        }
+    }
+
+    pub fn verify(
+        self,
+        vk: &VerifyingKey<Circuit>,
+        domain: ElectionDomain,
+        anchor: Anchor,
+        nf_anchor: Anchor,
+    ) -> Result<BallotData, Error> {
+        let data = self.data;
+        let proofs = &self.proofs;
+        for (p, action) in proofs.iter().zip(data.actions.iter()) {
+            let proof = Proof::<Circuit>::new(p.clone());
+            let cv_net = ValueCommitment::from_bytes(&action.cv).unwrap();
+            let domain_nf = Nullifier::from_bytes(&action.nf).unwrap();
+            let rk: VerificationKey<SpendAuth> = action.rk.try_into().unwrap();
+            let cmx = ExtractedNoteCommitment::from_bytes(&action.cmx).unwrap();
+            let instance = Instance::from_parts(
+                anchor,
+                cv_net.clone(),
+                domain_nf,
+                rk.clone(),
+                cmx,
+                domain.clone(),
+                nf_anchor,
+            );
+
+            proof.verify(vk, &[instance])?;
+        }
+
+        let signature: [u8; 64] = self.binding_signature.try_into().unwrap();
+        let signature = Signature::<Binding>::from(signature);
+
+        let cv = data
+            .actions
+            .iter()
+            .map(|ba| ValueCommitment::from_bytes(&ba.cv).unwrap())
+            .sum::<ValueCommitment>();
+        let pk: VerificationKey<Binding> = cv.to_bytes().try_into().unwrap();
+        pk.verify(&data.sig_hash(), &signature)
+            .map_err(|_| Error::ConstraintSystemFailure)?;
+        Ok(data)
+    }
+}
+
+///
 #[derive(Debug)]
-pub struct BallotBuilder {
+pub struct BallotBuilder<'a> {
+    pk: &'a ProvingKey<Circuit>,
+    vk: &'a VerifyingKey<Circuit>,
     election_seed: Hash,
     domain: Fp,
 
@@ -116,11 +194,20 @@ pub struct BallotBuilder {
 
 const COIN_TYPE: u32 = 133;
 
-impl BallotBuilder {
+impl<'a> BallotBuilder<'a> {
     ///
-    pub fn new(name: &str, seed: Hash, cmxs: Vec<Hash>, nfs: Vec<Nullifier>) -> Self {
+    pub fn new(
+        name: &str,
+        seed: Hash,
+        cmxs: Vec<Hash>,
+        nfs: Vec<Nullifier>,
+        pk: &'a ProvingKey<Circuit>,
+        vk: &'a VerifyingKey<Circuit>,
+    ) -> Self {
         let domain = crate::pob::domain(name.as_bytes());
         BallotBuilder {
+            pk,
+            vk,
             election_seed: seed,
             domain,
             cmxs,
@@ -131,18 +218,13 @@ impl BallotBuilder {
     }
 
     ///
-    pub fn add_note(
-        &mut self,
-        pos: u32,
-        sk: SpendingKey,
-        note: Note,
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn add_note(&mut self, pos: u32, sk: SpendingKey, note: Note) -> Result<(), Error> {
         self.inputs.push(VoteInput::from_parts(pos, sk, note));
         Ok(())
     }
 
     ///
-    pub fn add_candidate(&mut self, address: Address, weight: u64) -> Result<(), Box<dyn Error>> {
+    pub fn add_candidate(&mut self, address: Address, weight: u64) -> Result<(), Error> {
         self.outputs.push(VoteOutput(address, weight));
         Ok(())
     }
@@ -151,10 +233,13 @@ impl BallotBuilder {
     pub fn build<R: RngCore + CryptoRng>(
         mut self,
         mut rng: R,
-    ) -> Result<(BallotData, ValueCommitTrapdoor), Box<dyn Error>> {
+    ) -> Result<(BallotData, ValueCommitTrapdoor, Vec<Vec<u8>>), Error> {
+        println!("domain {}", hex::encode(self.domain.to_repr()));
+        let mut proofs = vec![];
         let positions = self.inputs.iter().map(|i| i.pos).collect::<Vec<_>>();
         let (root, cmx_paths) = calculate_merkle_paths(0, &positions, &self.cmxs);
         let anchor = Anchor::from_bytes(root).unwrap();
+        println!("anchor: {}", hex::encode(anchor.to_bytes()));
 
         for (cmx_path, i) in cmx_paths.into_iter().zip(self.inputs.iter_mut()) {
             i.cmx_path = MerklePath::from_parts(
@@ -188,8 +273,15 @@ impl BallotBuilder {
             };
             let nf_start = self.nfs[nf_pos];
             let nf_end = self.nfs[nf_pos + 1];
-            assert!(nf_pos % 2 == 0, "{} {:?} {:?} {:?} {:?}", nf_pos, find, nf,
-                nf_start, nf_end);
+            assert!(
+                nf_pos % 2 == 0,
+                "{} {:?} {:?} {:?} {:?}",
+                nf_pos,
+                find,
+                nf,
+                nf_start,
+                nf_end
+            );
             input.nf_pos = nf_pos as u32;
             input.nf_start = nf_start;
         }
@@ -197,6 +289,7 @@ impl BallotBuilder {
         let nfs = self.nfs.iter().map(|nf| nf.0.to_repr()).collect::<Vec<_>>();
         let (nf_root, nf_paths) = calculate_merkle_paths(0, &positions, &nfs);
         let nf_anchor = Anchor::from_bytes(nf_root).unwrap();
+        println!("nf_anchor: {}", hex::encode(nf_anchor.to_bytes()));
 
         for (nf_path, i) in nf_paths.into_iter().zip(self.inputs.iter_mut()) {
             i.nf_path = MerklePath::from_parts(
@@ -278,9 +371,19 @@ impl BallotBuilder {
                 rcv,
             );
             println!("Create proof");
-            let instance = instance.to_halo2_instance();
-            let prover = MockProver::run(12, &circuit, vec![instance]).unwrap();
+            let fp_instance = instance.to_halo2_instance();
+            let prover = MockProver::run(12, &circuit, vec![fp_instance]).unwrap();
             prover.verify().unwrap();
+
+            let proof = Proof::<Circuit>::create(
+                self.pk,
+                &[circuit],
+                std::slice::from_ref(&instance),
+                &mut rng,
+            )?;
+
+            proof.verify(self.vk, &[instance])?;
+            proofs.push(proof.as_ref().to_vec());
 
             let rk: Hash = rk.into();
             let action = BallotAction {
@@ -295,7 +398,13 @@ impl BallotBuilder {
             println!("{}", hex::encode(&bin_action));
             ballot_actions.push(action);
         }
-        Ok((BallotData { actions: ballot_actions }, total_rcv))
+        Ok((
+            BallotData {
+                actions: ballot_actions,
+            },
+            total_rcv,
+            proofs,
+        ))
     }
 }
 
@@ -303,10 +412,21 @@ impl BallotBuilder {
 mod tests {
     use super::BallotBuilder;
     use crate::{
-        keys::{FullViewingKey, Scope, SpendingKey}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed}, primitives::redpallas::{Binding, Signature, VerificationKey}, value::{NoteValue, ValueCommitTrapdoor, ValueCommitment}, vote::{
-            builder::COIN_TYPE, encryption::EncryptedVote, path::build_nf_ranges
-        }, Note
+        keys::{FullViewingKey, Scope, SpendingKey},
+        note::{ExtractedNoteCommitment, Nullifier, RandomSeed},
+        primitives::redpallas::{Binding, Signature, VerificationKey},
+        value::{NoteValue, ValueCommitment},
+        vote::{
+            builder::{BallotEnvelope, COIN_TYPE},
+            circuit::{Circuit, ElectionDomain},
+            encryption::EncryptedVote,
+            path::build_nf_ranges,
+            proof::{ProvingKey, VerifyingKey},
+        },
+        Anchor, Note,
     };
+    use ff::PrimeField;
+    use pasta_curves::pallas;
     use rand::{RngCore, SeedableRng};
 
     #[test]
@@ -315,6 +435,8 @@ mod tests {
         let sk = SpendingKey::random(&mut rng);
         let fvk = FullViewingKey::from(&sk);
         let my_address = fvk.address_at(0u64, Scope::External);
+        let pk = ProvingKey::<Circuit>::build();
+        let vk = VerifyingKey::build();
 
         let mut notes = vec![];
         let mut cmxs = vec![];
@@ -345,7 +467,7 @@ mod tests {
         nfs.sort();
         let nfs = build_nf_ranges(nfs.into_iter());
 
-        let mut builder = BallotBuilder::new("test-election", [42u8; 32], cmxs, nfs);
+        let mut builder = BallotBuilder::new("test-election", [42u8; 32], cmxs, nfs, &pk, &vk);
         let total_value = notes.iter().map(|(_, n)| n.value().inner()).sum::<u64>();
         for (i, n) in notes {
             builder.add_note(i, sk, n.clone()).unwrap();
@@ -360,7 +482,7 @@ mod tests {
                 .add_candidate(address, total_value / N_CANDIDATES)
                 .unwrap();
         }
-        let (b, rcv) = builder.build(&mut rng).unwrap();
+        let (b, rcv, proofs) = builder.build(&mut rng).unwrap();
         let bas = &b.actions;
         for i in 0..N_CANDIDATES {
             let sk = SpendingKey::from_zip32_seed(&[0u8; 32], COIN_TYPE, i as u32).unwrap();
@@ -377,8 +499,93 @@ mod tests {
         let signature: [u8; 64] = b.binding_sign(rcv, &mut rng).try_into().unwrap();
         println!("signature {}", hex::encode(&signature));
         let signature = Signature::<Binding>::from(signature);
-        let cv = bas.iter().map(|ba| ValueCommitment::from_bytes(&ba.cv).unwrap()).sum::<ValueCommitment>();
+        let cv = bas
+            .iter()
+            .map(|ba| ValueCommitment::from_bytes(&ba.cv).unwrap())
+            .sum::<ValueCommitment>();
         let pk: VerificationKey<Binding> = cv.to_bytes().try_into().unwrap();
         pk.verify(&b.sig_hash(), &signature).unwrap();
+    }
+
+    #[test]
+    fn g() {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+        let my_address = fvk.address_at(0u64, Scope::External);
+        let pk = ProvingKey::<Circuit>::build();
+        let vk = VerifyingKey::build();
+
+        let mut notes = vec![];
+        let mut cmxs = vec![];
+        let mut nfs = vec![];
+        for i in 0..100 {
+            let rho = Nullifier::dummy(&mut rng);
+            let rseed = RandomSeed::random(&mut rng, &rho);
+            let v = rng.next_u32() % 100;
+            let note = Note::from_parts(
+                my_address.clone(),
+                NoteValue::from_raw((v as u64) * 100_000_000),
+                rho,
+                rseed,
+            )
+            .unwrap();
+            let cmx = note.commitment();
+            let cmx = ExtractedNoteCommitment::from(cmx);
+            let cmx = cmx.to_bytes();
+            cmxs.push(cmx);
+
+            if i % 10 == 0 {
+                notes.push((i, note));
+            } else if i % 3 == 0 {
+                let nf = note.nullifier(&fvk);
+                nfs.push(nf);
+            }
+        }
+        nfs.sort();
+        let nfs = build_nf_ranges(nfs.into_iter());
+
+        let mut builder = BallotBuilder::new("test-election", [42u8; 32], cmxs, nfs, &pk, &vk);
+        let total_value = notes.iter().map(|(_, n)| n.value().inner()).sum::<u64>();
+        for (i, n) in notes {
+            builder.add_note(i, sk, n.clone()).unwrap();
+        }
+        const N_CANDIDATES: u64 = 4;
+        assert!(total_value % N_CANDIDATES == 0);
+        for i in 0..N_CANDIDATES {
+            let sk = SpendingKey::from_zip32_seed(&[0u8; 32], COIN_TYPE, i as u32).unwrap();
+            let fvk = FullViewingKey::from(&sk);
+            let address = fvk.address_at(0u64, Scope::External);
+            builder
+                .add_candidate(address, total_value / N_CANDIDATES)
+                .unwrap();
+        }
+        let (data, rcv, proofs) = builder.build(&mut rng).unwrap();
+
+        let ballot = BallotEnvelope::build(data, rcv, proofs, &mut rng);
+
+        let domain = pallas::Base::from_repr(
+            hex::decode("81262ef6776ba0266f34b94373c1e684488b00de6c0bcc4f9225f00d31c16502")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        let anchor = Anchor::from_bytes(
+            hex::decode("0339a0698071fc106e36801ac4c5717c6688219a4857bec5b63f77ff38d4ef28")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        let nf_anchor = Anchor::from_bytes(
+            hex::decode("94ea7451f2895856adedf21273e5f28456c098efb441e1ecc0f961d00e700626")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+
+        let _data = ballot.verify(&vk, ElectionDomain(domain), anchor, nf_anchor).unwrap();
     }
 }
