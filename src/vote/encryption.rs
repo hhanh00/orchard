@@ -3,7 +3,7 @@ use zcash_note_encryption::{try_compact_note_decryption, ShieldedOutput};
 
 use crate::{keys::{FullViewingKey, PreparedIncomingViewingKey, Scope}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed}, note_encryption::OrchardDomain, value::NoteValue, Address, Note};
 
-use super::BallotAction;
+use crate::vote::ballot::BallotAction;
 
 ///
 #[derive(Debug)]

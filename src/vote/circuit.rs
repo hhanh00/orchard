@@ -945,6 +945,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
     }
 }
 
+///
 #[derive(Clone, Debug)]
 pub struct ElectionDomain(pub pallas::Base);
 

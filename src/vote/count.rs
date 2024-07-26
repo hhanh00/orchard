@@ -517,6 +517,7 @@ pub struct CandidateCountEnvelope {
 }
 
 impl CandidateCountEnvelope {
+    ///
     pub fn verify(self, vk: &VerifyingKey<Circuit>) -> Result<CandidateCount, Error> {
         let mut address = [0u8; 43];
         address.copy_from_slice(&self.data.candidate);
@@ -557,6 +558,7 @@ pub struct CountBuilder<'a> {
 }
 
 impl <'a> CountBuilder<'a> {
+    ///
     pub fn new(candidate: Address, pk: &'a ProvingKey<Circuit>, vk: &'a VerifyingKey<Circuit>) -> Self {
         CountBuilder {
             pk, vk,
@@ -568,6 +570,7 @@ impl <'a> CountBuilder<'a> {
         }
     }
 
+    ///
     pub fn add_vote<R: RngCore + CryptoRng>(
         &mut self,
         vote: &DecryptedVote,
@@ -609,6 +612,7 @@ impl <'a> CountBuilder<'a> {
         Ok(())
     }
 
+    ///
     pub fn build<R: RngCore + CryptoRng>(self, mut rng: R) -> CandidateCountEnvelope {
         let data: CandidateCount = CandidateCount {
             candidate: self.candidate.to_raw_address_bytes().to_vec(),
