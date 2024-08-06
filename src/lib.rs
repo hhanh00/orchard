@@ -25,12 +25,11 @@ mod constants;
 pub mod keys;
 pub mod note;
 pub mod note_encryption;
-pub mod pob;
-pub mod vote;
 pub mod primitives;
 mod spec;
 pub mod tree;
 pub mod value;
+pub mod vote;
 pub mod zip32;
 
 #[cfg(test)]

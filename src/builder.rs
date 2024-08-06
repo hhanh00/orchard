@@ -9,6 +9,7 @@ use nonempty::NonEmpty;
 use pasta_curves::pallas;
 use rand::{prelude::SliceRandom, CryptoRng, RngCore};
 
+use crate::primitives::redpallas::SigningKey;
 use crate::{
     action::Action,
     address::Address,
@@ -24,7 +25,6 @@ use crate::{
     tree::{Anchor, MerklePath},
     value::{self, NoteValue, OverflowError, ValueCommitTrapdoor, ValueCommitment, ValueSum},
 };
-use crate::primitives::redpallas::SigningKey;
 
 const MIN_ACTIONS: usize = 2;
 
@@ -498,7 +498,9 @@ impl InProgress<Unproven, Unauthorized> {
     pub fn empty() -> Self {
         Self {
             proof: Unproven { circuits: vec![] },
-            sigs: Unauthorized { bsk: SigningKey::<Binding>::try_from([0; 32]).unwrap() }
+            sigs: Unauthorized {
+                bsk: SigningKey::<Binding>::try_from([0; 32]).unwrap(),
+            },
         }
     }
 }
@@ -570,7 +572,7 @@ pub struct SigningMetadata {
     /// These keys are used automatically in [`Bundle<Unauthorized>::prepare`] or
     /// [`Bundle<Unauthorized>::apply_signatures`] to sign dummy spends.
     pub dummy_ask: Option<SpendAuthorizingKey>,
-    /// 
+    ///
     pub parts: SigningParts,
 }
 

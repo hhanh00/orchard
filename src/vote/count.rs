@@ -1,6 +1,7 @@
 //! The Orchard Action circuit implementation.
 
 use super::{
+    errors::VoteError,
     proof::{ProvingKey, VerifyingKey},
     Hash,
 };
@@ -8,7 +9,6 @@ use blake2b_simd::Params;
 use group::Curve;
 use halo2_proofs::{
     circuit::{floor_planner, Layouter, Value},
-    dev::MockProver,
     plonk::{self, Advice, Column, Error, Instance as InstanceColumn},
 };
 use pasta_curves::{arithmetic::CurveAffine, pallas, vesta};
@@ -62,19 +62,15 @@ const PKD_X: usize = 5;
 const PKD_Y: usize = 6;
 
 pub struct VotePowerInfo {
-    domain_nf: Nullifier,
+    dnf: Nullifier,
     nf_start: Nullifier,
     nf_path: crate::tree::MerklePath,
 }
 
 impl VotePowerInfo {
-    pub fn from_parts(
-        domain_nf: Nullifier,
-        nf_start: Nullifier,
-        nf_path: crate::tree::MerklePath,
-    ) -> Self {
+    fn from_parts(dnf: Nullifier, nf_start: Nullifier, nf_path: crate::tree::MerklePath) -> Self {
         VotePowerInfo {
-            domain_nf,
+            dnf,
             nf_start,
             nf_path,
         }
@@ -95,25 +91,25 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn add_chip(&self) -> AddChip {
+    pub(crate) fn add_chip(&self) -> AddChip {
         AddChip::construct(self.add_config.clone())
     }
 
-    pub fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
+    pub(crate) fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
         EccChip::construct(self.ecc_config.clone())
     }
 
-    pub fn sinsemilla_chip_1(
+    pub(crate) fn sinsemilla_chip_1(
         &self,
     ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         SinsemillaChip::construct(self.sinsemilla_config_1.clone())
     }
 
-    pub fn poseidon_chip(&self) -> PoseidonChip<pallas::Base, 3, 2> {
+    pub(crate) fn poseidon_chip(&self) -> PoseidonChip<pallas::Base, 3, 2> {
         PoseidonChip::construct(self.poseidon_config.clone())
     }
 
-    pub fn note_commit_chip_old(&self) -> NoteCommitChip {
+    pub(crate) fn note_commit_chip_old(&self) -> NoteCommitChip {
         NoteCommitChip::construct(self.old_note_commit_config.clone())
     }
 }
@@ -121,17 +117,17 @@ impl Config {
 /// The Orchard Action circuit.
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
-    pub(crate) g_d_old: Value<NonIdentityPallasPoint>,
-    pub(crate) pk_d_old: Value<DiversifiedTransmissionKey>,
-    pub(crate) v_old: Value<NoteValue>,
-    pub(crate) rho_old: Value<Nullifier>,
-    pub(crate) psi_old: Value<pallas::Base>,
-    pub(crate) rcm_old: Value<NoteCommitTrapdoor>,
-    pub(crate) rcv: Value<ValueCommitTrapdoor>,
+    g_d_old: Value<NonIdentityPallasPoint>,
+    pk_d_old: Value<DiversifiedTransmissionKey>,
+    v_old: Value<NoteValue>,
+    rho_old: Value<Nullifier>,
+    psi_old: Value<pallas::Base>,
+    rcm_old: Value<NoteCommitTrapdoor>,
+    rcv: Value<ValueCommitTrapdoor>,
 }
 
 impl Circuit {
-    pub(crate) fn from_parts(
+    fn from_parts(
         g_d_old: NonIdentityPallasPoint,
         pk_d_old: DiversifiedTransmissionKey,
         v_old: NoteValue,
@@ -408,9 +404,9 @@ pub struct ElectionDomain(pub pallas::Base);
 /// Public inputs to the Orchard Action circuit.
 #[derive(Clone, Debug)]
 pub struct Instance {
-    pub(crate) cv_net: ValueCommitment,
-    pub(crate) cmx: ExtractedNoteCommitment,
-    pub(crate) address: Address,
+    cv_net: ValueCommitment,
+    cmx: ExtractedNoteCommitment,
+    address: Address,
 }
 
 impl Instance {
@@ -421,11 +417,7 @@ impl Instance {
     /// Use [`Bundle::verify_proof`] instead if you have the full bundle.
     ///
     /// [`Bundle::verify_proof`]: crate::Bundle::verify_proof
-    pub fn from_parts(
-        cv_net: ValueCommitment,
-        cmx: ExtractedNoteCommitment,
-        address: Address,
-    ) -> Self {
+    fn from_parts(cv_net: ValueCommitment, cmx: ExtractedNoteCommitment, address: Address) -> Self {
         Instance {
             cv_net,
             cmx,
@@ -478,11 +470,11 @@ pub struct CandidateCount {
     pub candidate: Vec<u8>,
     ///
     pub total_vote: u64,
-    pub votes: Vec<VoteCount>,
+    votes: Vec<VoteCount>,
 }
 
 impl CandidateCount {
-    pub fn sig_hash(&self) -> Hash {
+    fn sig_hash(&self) -> Hash {
         let bin_data = serde_cbor::to_vec(&self).unwrap();
         let p = Params::new()
             .hash_length(32)
@@ -491,7 +483,7 @@ impl CandidateCount {
         p.as_bytes().try_into().unwrap()
     }
 
-    pub fn binding_sign<R: RngCore + CryptoRng>(
+    fn binding_sign<R: RngCore + CryptoRng>(
         &self,
         rcv: ValueCommitTrapdoor,
         mut rng: R,
@@ -508,17 +500,14 @@ impl CandidateCount {
 ///
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CandidateCountEnvelope {
-    ///
-    pub data: CandidateCount,
-    ///
-    pub binding_signature: Vec<u8>,
-    ///
-    pub proofs: Vec<Vec<u8>>,
+    data: CandidateCount,
+    binding_signature: Vec<u8>,
+    proofs: Vec<Vec<u8>>,
 }
 
 impl CandidateCountEnvelope {
     ///
-    pub fn verify(self, vk: &VerifyingKey<Circuit>) -> Result<CandidateCount, Error> {
+    pub fn verify(self, vk: &VerifyingKey<Circuit>) -> Result<CandidateCount, VoteError> {
         let mut address = [0u8; 43];
         address.copy_from_slice(&self.data.candidate);
         let address = Address::from_raw_address_bytes(&address).unwrap();
@@ -533,14 +522,16 @@ impl CandidateCountEnvelope {
         let sig_hash = self.data.sig_hash();
         let signature: [u8; 64] = self.binding_signature.clone().try_into().unwrap();
         let signature = Signature::<Binding>::from(signature);
-        let cv = self.data
+        let cv = self
+            .data
             .votes
             .iter()
             .map(|vc| ValueCommitment::from_bytes(&vc.cv).unwrap())
             .sum::<ValueCommitment>()
             - ValueCommitment::derive_from_value(self.data.total_vote as i64);
         let pk: VerificationKey<Binding> = cv.to_bytes().try_into().unwrap();
-        pk.verify(&sig_hash, &signature).map_err(|_| Error::ConstraintSystemFailure)?;
+        pk.verify(&sig_hash, &signature)
+            .map_err(|_| VoteError::InvalidBindingSignature)?;
         Ok(self.data)
     }
 }
@@ -557,11 +548,16 @@ pub struct CountBuilder<'a> {
     proofs: Vec<Vec<u8>>,
 }
 
-impl <'a> CountBuilder<'a> {
+impl<'a> CountBuilder<'a> {
     ///
-    pub fn new(candidate: Address, pk: &'a ProvingKey<Circuit>, vk: &'a VerifyingKey<Circuit>) -> Self {
+    pub fn new(
+        candidate: Address,
+        pk: &'a ProvingKey<Circuit>,
+        vk: &'a VerifyingKey<Circuit>,
+    ) -> Self {
         CountBuilder {
-            pk, vk,
+            pk,
+            vk,
             candidate,
             rcv: ValueCommitTrapdoor::zero(),
             total_value: 0,
@@ -596,9 +592,10 @@ impl <'a> CountBuilder<'a> {
             vote.rseed.clone(),
             rcv,
         );
-        let fp_instance = instance.to_halo2_instance();
-        let prover = MockProver::run(K, &circuit, vec![fp_instance]).unwrap();
-        prover.verify().unwrap();
+
+        // let fp_instance = instance.to_halo2_instance();
+        // let prover = MockProver::run(K, &circuit, vec![fp_instance]).unwrap();
+        // prover.verify().unwrap();
 
         let proof = Proof::<Circuit>::create(
             self.pk,
@@ -607,7 +604,7 @@ impl <'a> CountBuilder<'a> {
             &mut rng,
         )?;
 
-        proof.verify(self.vk, &[instance])?;
+        // proof.verify(self.vk, &[instance])?;
         self.proofs.push(proof.as_ref().to_vec());
         Ok(())
     }

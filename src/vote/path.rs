@@ -1,6 +1,5 @@
 use std::mem::swap;
 
-use ff::PrimeField;
 use pasta_curves::Fp;
 
 use crate::note::Nullifier;
@@ -32,7 +31,7 @@ pub fn calculate_merkle_paths(
             }
         })
         .collect::<Vec<_>>();
-    let mut er = crate::pob::empty_hash();
+    let mut er = super::empty_hash();
     let mut layer = Vec::with_capacity(positions.len() + 2);
     for i in 0..32 {
         if i == 0 {
@@ -56,11 +55,11 @@ pub fn calculate_merkle_paths(
         let mut next_layer = Vec::with_capacity(pairs + 2);
 
         for j in 0..pairs {
-            let h = crate::pob::cmx_hash(i as u8, &layer[j * 2], &layer[j * 2 + 1]);
+            let h = super::cmx_hash(i as u8, &layer[j * 2], &layer[j * 2 + 1]);
             next_layer.push(h);
         }
 
-        er = crate::pob::cmx_hash(i as u8, &er, &er);
+        er = super::cmx_hash(i as u8, &er, &er);
         if next_layer.len() & 1 == 1 {
             next_layer.push(er);
         }
@@ -72,51 +71,8 @@ pub fn calculate_merkle_paths(
     (root, paths)
 }
 
-pub fn make_nf_leaves(nfs: &[Nullifier], my_nfs: &[Nullifier]) -> (Vec<Hash>, Vec<u32>) {
-    let mut prev = Fp::zero();
-    let mut leaves = vec![];
-    let mut nfs_pos = vec![0u32; my_nfs.len()];
-    for (pos, r) in nfs.iter().enumerate() {
-        let r = r.0;
-        // Skip empty ranges when nullifiers are consecutive
-        // (with statistically negligible odds)
-        if prev < r {
-            // Ranges are inclusive of both ends
-            let a = prev;
-            let b = r - Fp::one();
-
-            for (idx, n) in my_nfs.iter().enumerate() {
-                if n.0 >= a && n.0 <= b {
-                    nfs_pos[idx] = (2 * pos) as u32;
-                }
-            }
-
-            leaves.push(a);
-            leaves.push(b);
-        }
-        prev = r + Fp::one();
-    }
-    if prev != Fp::zero() {
-        // overflow when a nullifier == max
-        let a = prev;
-        let b = Fp::one().neg();
-        for (idx, n) in my_nfs.iter().enumerate() {
-            if n.0 >= a && n.0 <= b {
-                nfs_pos[idx] = (2 * nfs.len()) as u32;
-            }
-        }
-
-        leaves.push(a);
-        leaves.push(b);
-    }
-    for l in leaves.iter() {
-        println!("{:?}", l);
-    }
-    (leaves.iter().map(|v| v.to_repr()).collect(), nfs_pos)
-}
-
 ///
-pub fn build_nf_ranges(nfs: impl IntoIterator<Item=Nullifier>) -> Vec<Nullifier> {
+pub fn build_nf_ranges(nfs: impl IntoIterator<Item = Nullifier>) -> Vec<Nullifier> {
     let mut prev = Fp::zero();
     let mut leaves = vec![];
     for r in nfs {

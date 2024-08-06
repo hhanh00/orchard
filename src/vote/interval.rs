@@ -103,17 +103,11 @@ impl IntervalChip {
             let a = meta.query_advice(a.clone(), Rotation::cur());
             let b = meta.query_advice(b.clone(), Rotation::cur());
             let c = meta.query_advice(c.clone(), Rotation::cur());
-            Constraints::with_selector(
-                s_and,
-                [
-                    c - a * b,
-                ],
-            )
+            Constraints::with_selector(s_and, [c - a * b])
         });
 
         let range_config = LookupRangeCheckConfig::configure(meta, b, table_idx);
-        let is_zero_config = IsZeroChip::configure(meta, 
-            a, b, c);
+        let is_zero_config = IsZeroChip::configure(meta, a, b, c);
         IntervalChipConfig {
             s_interval,
             s_and,
@@ -131,8 +125,7 @@ impl IntervalChip {
         IntervalChip { config }
     }
 
-    ///
-    pub fn load(
+    pub(crate) fn load(
         &self,
         mut layouter: impl Layouter<Fp>,
         table_idx: TableColumn,
@@ -189,9 +182,12 @@ impl IntervalChip {
             },
         )?;
 
-        let c1 = config
-            .range_config
-            .copy_check(layouter.namespace(|| "x < 2^M"), x, NUM_WORDS, false)?;
+        let c1 = config.range_config.copy_check(
+            layouter.namespace(|| "x < 2^M"),
+            x,
+            NUM_WORDS,
+            false,
+        )?;
         let c1 = c1.last().unwrap();
         let c1 = is_zero_chip.is_zero(layouter.namespace(|| "c1 <- !c1"), c1.clone())?;
 
@@ -204,14 +200,17 @@ impl IntervalChip {
         let c2 = c2.last().unwrap();
         let c2 = is_zero_chip.is_zero(layouter.namespace(|| "c2 <- !c2"), c2.clone())?;
 
-        let success = layouter.assign_region(|| "c1 && c2", |mut region| {
-            config.s_and.enable(&mut region, 0)?;
-            c1.copy_advice(|| "c1", &mut region, config.a, 0)?;
-            c2.copy_advice(|| "c2", &mut region, config.b, 0)?;
-            let c1_c2 = c1.value().zip(c2.value()).map(|(c1, c2)| c1 * c2);
-            let success = region.assign_advice(|| "c1 and c2", config.c, 0, || c1_c2)?;
-            Ok(success)
-        })?;
+        let success = layouter.assign_region(
+            || "c1 && c2",
+            |mut region| {
+                config.s_and.enable(&mut region, 0)?;
+                c1.copy_advice(|| "c1", &mut region, config.a, 0)?;
+                c2.copy_advice(|| "c2", &mut region, config.b, 0)?;
+                let c1_c2 = c1.value().zip(c2.value()).map(|(c1, c2)| c1 * c2);
+                let success = region.assign_advice(|| "c1 and c2", config.c, 0, || c1_c2)?;
+                Ok(success)
+            },
+        )?;
 
         Ok(success)
     }

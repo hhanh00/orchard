@@ -35,7 +35,7 @@ impl Address {
         self.d
     }
 
-    /// 
+    ///
     pub fn g_d(&self) -> NonIdentityPallasPoint {
         diversify_hash(self.d.as_array())
     }

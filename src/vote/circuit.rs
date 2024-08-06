@@ -36,7 +36,7 @@ use crate::{
         },
         note_commit::{NoteCommitChip, NoteCommitConfig},
     },
-    pob::interval::{IntervalChip, IntervalChipConfig},
+    vote::interval::{IntervalChip, IntervalChipConfig},
 };
 use halo2_gadgets::{
     ecc::{
@@ -71,20 +71,20 @@ const NF_ANCHOR: usize = 7;
 const DOMAIN: usize = 8;
 
 #[derive(Debug)]
-pub struct VotePowerInfo {
-    domain_nf: Nullifier,
+pub(crate) struct VotePowerInfo {
+    dnf: Nullifier,
     nf_start: Nullifier,
     nf_path: crate::tree::MerklePath,
 }
 
 impl VotePowerInfo {
-    pub fn from_parts(
-        domain_nf: Nullifier,
+    pub(crate) fn from_parts(
+        dnf: Nullifier,
         nf_start: Nullifier,
         nf_path: crate::tree::MerklePath,
     ) -> Self {
         VotePowerInfo {
-            domain_nf,
+            dnf,
             nf_start,
             nf_path,
         }
@@ -113,51 +113,51 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn add_chip(&self) -> AddChip {
+    pub(crate) fn add_chip(&self) -> AddChip {
         AddChip::construct(self.add_config.clone())
     }
 
-    pub fn commit_ivk_chip(&self) -> CommitIvkChip {
+    pub(crate) fn commit_ivk_chip(&self) -> CommitIvkChip {
         CommitIvkChip::construct(self.commit_ivk_config.clone())
     }
 
-    pub fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
+    pub(crate) fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
         EccChip::construct(self.ecc_config.clone())
     }
 
-    pub fn sinsemilla_chip_1(
+    pub(crate) fn sinsemilla_chip_1(
         &self,
     ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         SinsemillaChip::construct(self.sinsemilla_config_1.clone())
     }
 
-    pub fn sinsemilla_chip_2(
+    pub(crate) fn sinsemilla_chip_2(
         &self,
     ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         SinsemillaChip::construct(self.sinsemilla_config_2.clone())
     }
 
-    pub fn merkle_chip_1(
+    pub(crate) fn merkle_chip_1(
         &self,
     ) -> MerkleChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         MerkleChip::construct(self.merkle_config_1.clone())
     }
 
-    pub fn merkle_chip_2(
+    pub(crate) fn merkle_chip_2(
         &self,
     ) -> MerkleChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         MerkleChip::construct(self.merkle_config_2.clone())
     }
 
-    pub fn poseidon_chip(&self) -> PoseidonChip<pallas::Base, 3, 2> {
+    pub(crate) fn poseidon_chip(&self) -> PoseidonChip<pallas::Base, 3, 2> {
         PoseidonChip::construct(self.poseidon_config.clone())
     }
 
-    pub fn note_commit_chip_new(&self) -> NoteCommitChip {
+    pub(crate) fn note_commit_chip_new(&self) -> NoteCommitChip {
         NoteCommitChip::construct(self.new_note_commit_config.clone())
     }
 
-    pub fn note_commit_chip_old(&self) -> NoteCommitChip {
+    pub(crate) fn note_commit_chip_old(&self) -> NoteCommitChip {
         NoteCommitChip::construct(self.old_note_commit_config.clone())
     }
 }
@@ -165,59 +165,32 @@ impl Config {
 /// The Orchard Action circuit.
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
-    pub(crate) path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
-    pub(crate) pos: Value<u32>,
-    pub(crate) g_d_old: Value<NonIdentityPallasPoint>,
-    pub(crate) pk_d_old: Value<DiversifiedTransmissionKey>,
-    pub(crate) v_old: Value<NoteValue>,
-    pub(crate) rho_old: Value<Nullifier>,
-    pub(crate) psi_old: Value<pallas::Base>,
-    pub(crate) rcm_old: Value<NoteCommitTrapdoor>,
-    pub(crate) nf_old: Value<Nullifier>,
-    pub(crate) nf_start: Value<Nullifier>,
-    pub(crate) nf_path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
-    pub(crate) nf_pos: Value<u32>,
-    pub(crate) cm_old: Value<NoteCommitment>,
-    pub(crate) alpha: Value<pallas::Scalar>,
-    pub(crate) ak: Value<SpendValidatingKey>,
-    pub(crate) nk: Value<NullifierDerivingKey>,
-    pub(crate) rivk: Value<CommitIvkRandomness>,
-    pub(crate) g_d_new: Value<NonIdentityPallasPoint>,
-    pub(crate) pk_d_new: Value<DiversifiedTransmissionKey>,
-    pub(crate) v_new: Value<NoteValue>,
-    pub(crate) psi_new: Value<pallas::Base>,
-    pub(crate) rcm_new: Value<NoteCommitTrapdoor>,
-    pub(crate) rcv: Value<ValueCommitTrapdoor>,
+    path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
+    pos: Value<u32>,
+    g_d_old: Value<NonIdentityPallasPoint>,
+    pk_d_old: Value<DiversifiedTransmissionKey>,
+    v_old: Value<NoteValue>,
+    rho_old: Value<Nullifier>,
+    psi_old: Value<pallas::Base>,
+    rcm_old: Value<NoteCommitTrapdoor>,
+    nf_old: Value<Nullifier>,
+    nf_start: Value<Nullifier>,
+    nf_path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
+    nf_pos: Value<u32>,
+    cm_old: Value<NoteCommitment>,
+    alpha: Value<pallas::Scalar>,
+    ak: Value<SpendValidatingKey>,
+    nk: Value<NullifierDerivingKey>,
+    rivk: Value<CommitIvkRandomness>,
+    g_d_new: Value<NonIdentityPallasPoint>,
+    pk_d_new: Value<DiversifiedTransmissionKey>,
+    v_new: Value<NoteValue>,
+    psi_new: Value<pallas::Base>,
+    rcm_new: Value<NoteCommitTrapdoor>,
+    rcv: Value<ValueCommitTrapdoor>,
 }
 
 impl Circuit {
-    /// This constructor is public to enable creation of custom builders.
-    /// If you are not creating a custom builder, use [`Builder`] to compose
-    /// and authorize a transaction.
-    ///
-    /// Constructs a `Circuit` from the following components:
-    /// - `spend`: [`SpendInfo`] of the note spent in scope of the action
-    /// - `output_note`: a note created in scope of the action
-    /// - `alpha`: a scalar used for randomization of the action spend validating key
-    /// - `rcv`: trapdoor for the action value commitment
-    ///
-    /// Returns `None` if the `rho` of the `output_note` is not equal
-    /// to the nullifier of the spent note.
-    ///
-    /// [`SpendInfo`]: crate::builder::SpendInfo
-    /// [`Builder`]: crate::builder::Builder
-    pub fn from_action_context(
-        vote_power: VotePowerInfo,
-        spend: SpendInfo,
-        output_note: Note,
-        alpha: pallas::Scalar,
-        rcv: ValueCommitTrapdoor,
-    ) -> Option<Circuit> {
-        (spend.note.nullifier(&spend.fvk) == output_note.rho()).then(|| {
-            Self::from_action_context_unchecked(vote_power, spend, output_note, alpha, rcv)
-        })
-    }
-
     pub(crate) fn from_action_context_unchecked(
         vote_power: VotePowerInfo,
         spend: SpendInfo,
@@ -711,8 +684,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         };
 
         // Domain Nullifier integrity
-        let domain_nf = {
-            let domain_nf = crate::circuit::gadget::derive_domain_nullifier(
+        let dnf = {
+            let dnf = crate::circuit::gadget::derive_domain_nullifier(
                 layouter.namespace(|| {
                     "domain_nf = DeriveNullifier_domain_nk(rho_old, psi_old, cm_old)"
                 }),
@@ -728,8 +701,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )?;
 
             // Constrain nf_old to equal public input
-            layouter.constrain_instance(domain_nf.inner().cell(), config.primary, DOMAIN_NF)?;
-            domain_nf
+            layouter.constrain_instance(dnf.inner().cell(), config.primary, DOMAIN_NF)?;
+            dnf
         };
 
         // Spend authority (https://p.z.cash/ZKS:action-spend-authority)
@@ -849,7 +822,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             };
 
             // ρ^new = dnf^old
-            let rho_new = domain_nf.inner().clone();
+            let rho_new = dnf.inner().clone();
 
             // Witness psi_new
             let psi_new = assign_free_advice(
@@ -952,13 +925,13 @@ pub struct ElectionDomain(pub pallas::Base);
 /// Public inputs to the Orchard Action circuit.
 #[derive(Clone, Debug)]
 pub struct Instance {
-    pub(crate) anchor: Anchor,
-    pub(crate) cv_net: ValueCommitment,
-    pub(crate) domain_nf: Nullifier,
-    pub(crate) rk: VerificationKey<SpendAuth>,
-    pub(crate) cmx: ExtractedNoteCommitment,
-    pub(crate) domain: ElectionDomain,
-    pub(crate) nf_anchor: Anchor,
+    domain: ElectionDomain,
+    anchor: Anchor,
+    cv_net: ValueCommitment,
+    dnf: Nullifier,
+    rk: VerificationKey<SpendAuth>,
+    cmx: ExtractedNoteCommitment,
+    nf_anchor: Anchor,
 }
 
 impl Instance {
@@ -972,7 +945,7 @@ impl Instance {
     pub fn from_parts(
         anchor: Anchor,
         cv_net: ValueCommitment,
-        domain_nf: Nullifier,
+        dnf: Nullifier,
         rk: VerificationKey<SpendAuth>,
         cmx: ExtractedNoteCommitment,
         domain: ElectionDomain,
@@ -981,7 +954,7 @@ impl Instance {
         Instance {
             anchor,
             cv_net,
-            domain_nf,
+            dnf,
             rk,
             cmx,
             domain,
@@ -997,7 +970,7 @@ impl Halo2Instance for Instance {
         instance[ANCHOR] = self.anchor.inner();
         instance[CV_NET_X] = self.cv_net.x();
         instance[CV_NET_Y] = self.cv_net.y();
-        instance[DOMAIN_NF] = self.domain_nf.0;
+        instance[DOMAIN_NF] = self.dnf.0;
 
         let rk = pallas::Point::from_bytes(&self.rk.clone().into())
             .unwrap()
@@ -1056,7 +1029,7 @@ mod tests {
         nf_path: MerklePath,
         cmx_path: MerklePath,
     }
-    
+
     fn filter_notes<F>(
         notes: &[Note],
         fvk: &FullViewingKey,
@@ -1185,12 +1158,12 @@ mod tests {
             } else {
                 (&dummy_sk, &dummy_fvk, &dummy_spend)
             };
-            let domain_nf = spend.nullifier_domain(spend_fvk, domain.0);
+            let dnf = spend.nullifier_domain(spend_fvk, domain.0);
 
             let sk = SpendingKey::from_zip32_seed(&entropy, 133, c as u32).unwrap();
             let fvk = FullViewingKey::from(&sk);
             let candidate = fvk.address_at(0u64, Scope::External);
-            let rho = domain_nf;
+            let rho = dnf;
             let rseed = RandomSeed::random(&mut rng, &rho);
             let output = Note::from_parts(candidate, value, rho, rseed).unwrap();
 
@@ -1208,7 +1181,7 @@ mod tests {
             let instance = Instance::from_parts(
                 anchor,
                 cv_net.clone(),
-                domain_nf,
+                dnf,
                 rk.clone(),
                 cmx,
                 domain.clone(),
@@ -1222,17 +1195,17 @@ mod tests {
                 enc_ciphertext: encryptor.encrypt_note_plaintext(),
                 out_ciphertext: [0u8; OUT_CIPHERTEXT_SIZE],
             };
-            let _action = Action::from_parts(domain_nf, rk, cmx, encrypted_note, cv_net, ());
+            let _action = Action::from_parts(dnf, rk, cmx, encrypted_note, cv_net, ());
 
             let vote_power = if c < my_notes.len() {
                 VotePowerInfo {
-                    domain_nf,
+                    dnf,
                     nf_start: my_notes[c].nf_start,
                     nf_path: my_notes[c].nf_path.clone(),
                 }
             } else {
                 VotePowerInfo {
-                    domain_nf,
+                    dnf,
                     nf_start: Nullifier::dummy(&mut rng),
                     nf_path: MerklePath::dummy(&mut rng),
                 }
@@ -1246,8 +1219,13 @@ mod tests {
             let output_note = output.clone();
 
             assert!(spend.nullifier_domain(spend_fvk, domain.0) == output_note.rho());
-            let circuit =
-                Circuit::from_action_context_unchecked(vote_power, spend_info, output_note, alpha, rcv);
+            let circuit = Circuit::from_action_context_unchecked(
+                vote_power,
+                spend_info,
+                output_note,
+                alpha,
+                rcv,
+            );
             println!("Create proof");
             let instance = instance.to_halo2_instance();
             let prover = MockProver::run(K, &circuit, vec![instance]).unwrap();

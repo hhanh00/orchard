@@ -23,6 +23,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs", "--html-in-header", "katex-header.html"]
 
 [dependencies]
+thiserror = "1.0"
 aes = "0.7"
 bitvec = "1"
 blake2b_simd = "1"

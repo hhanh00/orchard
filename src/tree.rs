@@ -112,7 +112,10 @@ impl MerklePath {
 
     /// Instantiates a new Merkle path given a leaf position and authentication path.
     pub fn empty() -> Self {
-        Self::from_parts(0, [MerkleHashOrchard(pallas::Base::ZERO); MERKLE_DEPTH_ORCHARD])
+        Self::from_parts(
+            0,
+            [MerkleHashOrchard(pallas::Base::ZERO); MERKLE_DEPTH_ORCHARD],
+        )
     }
 
     /// Instantiates a new Merkle path given a leaf position and authentication path.

@@ -20,9 +20,9 @@ use crate::{
     address::Address,
     primitives::redpallas::{self, SpendAuth},
     spec::{
-        commit_ivk, diversify_hash, extract_p, ka_orchard, ka_orchard_prepared, prf_nf,
-        to_base, to_scalar, NonIdentityPallasPoint, NonZeroPallasBase,
-        NonZeroPallasScalar, PreparedNonIdentityBase, PreparedNonZeroScalar, PrfExpand,
+        commit_ivk, diversify_hash, extract_p, ka_orchard, ka_orchard_prepared, prf_nf, to_base,
+        to_scalar, NonIdentityPallasPoint, NonZeroPallasBase, NonZeroPallasScalar,
+        PreparedNonIdentityBase, PreparedNonZeroScalar, PrfExpand,
     },
     zip32::{self, ChildIndex, ExtendedSpendingKey},
 };

@@ -1,6 +1,9 @@
 use std::marker::PhantomData;
 
-use halo2_proofs::{plonk::{self, SingleVerifier}, transcript::{Blake2bRead, Blake2bWrite}};
+use halo2_proofs::{
+    plonk::{self, SingleVerifier},
+    transcript::{Blake2bRead, Blake2bWrite},
+};
 use pasta_curves::{pallas, vesta};
 use rand::RngCore;
 
@@ -23,7 +26,7 @@ pub struct ProvingKey<S> {
     phantom: PhantomData<S>,
 }
 
-impl <S: Statement> ProvingKey<S> {
+impl<S: Statement> ProvingKey<S> {
     /// Builds the proving key.
     pub fn build() -> Self {
         let params = halo2_proofs::poly::commitment::Params::new(K);
@@ -32,7 +35,11 @@ impl <S: Statement> ProvingKey<S> {
         let vk = plonk::keygen_vk(&params, &circuit).unwrap();
         let pk = plonk::keygen_pk(&params, vk, &circuit).unwrap();
 
-        ProvingKey { params, pk, phantom: PhantomData::default() }
+        ProvingKey {
+            params,
+            pk,
+            phantom: PhantomData::default(),
+        }
     }
 }
 
@@ -44,7 +51,7 @@ pub struct VerifyingKey<S> {
     phantom: PhantomData<S>,
 }
 
-impl <S: Statement> VerifyingKey<S> {
+impl<S: Statement> VerifyingKey<S> {
     /// Builds the verifying key.
     pub fn build() -> Self {
         let params = halo2_proofs::poly::commitment::Params::new(K);
@@ -52,7 +59,11 @@ impl <S: Statement> VerifyingKey<S> {
 
         let vk = plonk::keygen_vk(&params, &circuit).unwrap();
 
-        VerifyingKey { params, vk, phantom: PhantomData::default() }
+        VerifyingKey {
+            params,
+            vk,
+            phantom: PhantomData::default(),
+        }
     }
 }
 
@@ -100,8 +111,15 @@ impl<S: Statement> Proof<S> {
     }
 
     /// Verifies this proof with the given instances.
-    pub fn verify(&self, vk: &VerifyingKey<S>, instances: &[S::Instance]) -> Result<(), plonk::Error> {
-        let instances: Vec<_> = instances.iter().map(|i| vec![i.to_halo2_instance()]).collect();
+    pub fn verify(
+        &self,
+        vk: &VerifyingKey<S>,
+        instances: &[S::Instance],
+    ) -> Result<(), plonk::Error> {
+        let instances: Vec<_> = instances
+            .iter()
+            .map(|i| vec![i.to_halo2_instance()])
+            .collect();
         let instances: Vec<_> = instances.iter().map(|i| &i[..]).collect();
         let instances: Vec<Vec<_>> = instances
             .iter()
