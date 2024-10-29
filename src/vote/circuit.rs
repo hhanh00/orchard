@@ -700,7 +700,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 nk.clone(),
             )?;
 
-            // Constrain nf_old to equal public input
+            // Constrain dnf_old to equal public input
             layouter.constrain_instance(dnf.inner().cell(), config.primary, DOMAIN_NF)?;
             dnf
         };
