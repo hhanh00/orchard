@@ -18,8 +18,8 @@ pub use encryption::{DecryptedVote, EncryptedVote};
 use ff::FromUniformBytes;
 use incrementalmerkletree::{Altitude, Hashable};
 use pasta_curves::pallas;
-pub use path::build_nf_ranges;
 pub use proof::{ProvingKey, VerifyingKey};
+pub use path::{build_nf_ranges, calculate_merkle_paths};
 
 use crate::tree::MerkleHashOrchard;
 
