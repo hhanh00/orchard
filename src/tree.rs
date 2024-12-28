@@ -172,8 +172,13 @@ impl MerkleHashOrchard {
         MerkleHashOrchard(value.inner())
     }
 
+    ///
+    pub fn from_base(value: pallas::Base) -> Self {
+        MerkleHashOrchard(value)
+    }
+
     /// Only used in the circuit.
-    pub(crate) fn inner(&self) -> pallas::Base {
+    pub fn inner(&self) -> pallas::Base {
         self.0
     }
 
