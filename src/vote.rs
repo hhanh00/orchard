@@ -1,13 +1,13 @@
 //! Proof of Balance
 mod ballot;
-mod circuit;
+pub mod circuit;
 mod count;
 mod encryption;
 mod errors;
 mod interval;
 mod logical;
 mod path;
-mod proof;
+pub mod proof;
 
 pub use errors::VoteError;
 pub use ballot::{BallotBuilder, BallotEnvelope};

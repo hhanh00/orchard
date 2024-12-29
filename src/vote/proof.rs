@@ -1,3 +1,4 @@
+//!
 use std::marker::PhantomData;
 
 use halo2_proofs::{
@@ -9,12 +10,17 @@ use rand::RngCore;
 
 const K: u32 = 15;
 
+///
 pub trait Statement {
+    ///
     type Circuit: plonk::Circuit<pallas::Base> + Default;
+    ///
     type Instance: Halo2Instance;
 }
 
+///
 pub trait Halo2Instance {
+    ///
     fn to_halo2_instance(&self) -> Vec<vesta::Scalar>;
 }
 
@@ -70,7 +76,7 @@ impl<S: Statement> VerifyingKey<S> {
 /// A proof of the validity of an Orchard [`Bundle`].
 ///
 /// [`Bundle`]: crate::bundle::Bundle
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Proof<S>(Vec<u8>, PhantomData<S>);
 
 impl<S> AsRef<[u8]> for Proof<S> {

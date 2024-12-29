@@ -6,7 +6,8 @@ use crate::note::Nullifier;
 
 use super::{Hash, DEPTH};
 
-#[derive(Clone, Default)]
+///
+#[derive(Clone, Default, Debug)]
 pub struct MerklePath {
     pub value: Hash,
     pub position: u32,
@@ -14,6 +15,7 @@ pub struct MerklePath {
     p: usize,
 }
 
+///
 pub fn calculate_merkle_paths(
     position_offset: usize,
     positions: &[u32],

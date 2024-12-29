@@ -70,11 +70,15 @@ const CMX: usize = 6;
 const NF_ANCHOR: usize = 7;
 const DOMAIN: usize = 8;
 
-#[derive(Debug)]
-pub(crate) struct VotePowerInfo {
-    dnf: Nullifier,
-    nf_start: Nullifier,
-    nf_path: crate::tree::MerklePath,
+///
+#[derive(Clone, Debug)]
+pub struct VotePowerInfo {
+    ///
+    pub dnf: Nullifier,
+    ///
+    pub nf_start: Nullifier,
+    ///
+    pub nf_path: crate::tree::MerklePath,
 }
 
 impl VotePowerInfo {
@@ -191,7 +195,8 @@ pub struct Circuit {
 }
 
 impl Circuit {
-    pub(crate) fn from_action_context_unchecked(
+    ///
+    pub fn from_action_context_unchecked(
         vote_power: VotePowerInfo,
         spend: SpendInfo,
         output_note: Note,
