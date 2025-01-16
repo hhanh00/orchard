@@ -9,6 +9,7 @@ use nonempty::NonEmpty;
 use pasta_curves::pallas;
 use rand::{prelude::SliceRandom, CryptoRng, RngCore};
 
+use crate::primitives::redpallas::SigningKey;
 use crate::{
     action::Action,
     address::Address,

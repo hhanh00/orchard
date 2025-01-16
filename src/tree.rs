@@ -111,6 +111,14 @@ impl MerklePath {
     }
 
     /// Instantiates a new Merkle path given a leaf position and authentication path.
+    pub fn empty() -> Self {
+        Self::from_parts(
+            0,
+            [MerkleHashOrchard(pallas::Base::ZERO); MERKLE_DEPTH_ORCHARD],
+        )
+    }
+
+    /// Instantiates a new Merkle path given a leaf position and authentication path.
     pub fn from_parts(position: u32, auth_path: [MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]) -> Self {
         Self {
             position,
@@ -164,8 +172,13 @@ impl MerkleHashOrchard {
         MerkleHashOrchard(value.inner())
     }
 
+    ///
+    pub fn from_base(value: pallas::Base) -> Self {
+        MerkleHashOrchard(value)
+    }
+
     /// Only used in the circuit.
-    pub(crate) fn inner(&self) -> pallas::Base {
+    pub fn inner(&self) -> pallas::Base {
         self.0
     }
 
