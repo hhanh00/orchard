@@ -1,26 +1,17 @@
-use std::mem::swap;
-
+use ff::PrimeField as _;
+use incrementalmerkletree::Hashable as _;
 use pasta_curves::Fp;
 
-use crate::note::Nullifier;
+use crate::tree::MerkleHashOrchard;
 
-use super::{Hash, DEPTH};
-
-///
-#[derive(Clone, Default, Debug)]
-pub struct MerklePath {
-    pub value: Hash,
-    pub position: u32,
-    pub path: [Hash; DEPTH],
-    p: usize,
-}
+use super::DEPTH;
 
 ///
 pub fn calculate_merkle_paths(
     position_offset: usize,
     positions: &[u32],
-    hashes: &[Hash],
-) -> (Hash, Vec<MerklePath>) {
+    hashes: &[Fp],
+) -> (Fp, Vec<MerklePath>) {
     let mut paths = positions
         .iter()
         .map(|p| {
@@ -28,16 +19,19 @@ pub fn calculate_merkle_paths(
             MerklePath {
                 value: hashes[rel_p],
                 position: rel_p as u32,
-                path: [Hash::default(); DEPTH],
+                path: [Fp::default(); DEPTH],
                 p: rel_p,
             }
         })
         .collect::<Vec<_>>();
-    let mut er = super::empty_hash();
+    let mut er = Fp::from(2);
     let mut layer = Vec::with_capacity(positions.len() + 2);
     for i in 0..32 {
         if i == 0 {
             layer.extend(hashes);
+            if layer.is_empty() {
+                layer.push(er);
+            }
             if layer.len() & 1 == 1 {
                 layer.push(er);
             }
@@ -57,16 +51,16 @@ pub fn calculate_merkle_paths(
         let mut next_layer = Vec::with_capacity(pairs + 2);
 
         for j in 0..pairs {
-            let h = super::cmx_hash(i as u8, &layer[j * 2], &layer[j * 2 + 1]);
+            let h = cmx_hash(i as u8, layer[j * 2], layer[j * 2 + 1]);
             next_layer.push(h);
         }
 
-        er = super::cmx_hash(i as u8, &er, &er);
+        er = cmx_hash(i as u8, er, er);
         if next_layer.len() & 1 == 1 {
             next_layer.push(er);
         }
 
-        swap(&mut layer, &mut next_layer);
+        std::mem::swap(&mut layer, &mut next_layer);
     }
 
     let root = layer[0];
@@ -74,30 +68,27 @@ pub fn calculate_merkle_paths(
 }
 
 ///
-pub fn build_nf_ranges(nfs: impl IntoIterator<Item = Nullifier>) -> Vec<Nullifier> {
-    let mut prev = Fp::zero();
-    let mut leaves = vec![];
-    for r in nfs {
-        let r = r.0;
-        // Skip empty ranges when nullifiers are consecutive
-        // (with statistically negligible odds)
-        if prev < r {
-            // Ranges are inclusive of both ends
-            let a = prev;
-            let b = r - Fp::one();
+#[derive(Clone, Default, Debug)]
+pub struct MerklePath {
+    pub value: Fp,
+    pub position: u32,
+    pub path: [Fp; DEPTH],
+    p: usize,
+}
 
-            leaves.push(Nullifier(a));
-            leaves.push(Nullifier(b));
-        }
-        prev = r + Fp::one();
+impl MerklePath {
+    pub fn to_orchard_merkle_tree(&self) -> crate::tree::MerklePath {
+        let auth_path = self
+            .path
+            .map(|h| MerkleHashOrchard::from_bytes(&h.to_repr()).unwrap());
+        let omp = crate::tree::MerklePath::from_parts(self.position, auth_path);
+        omp
     }
-    if prev != Fp::zero() {
-        // overflow when a nullifier == max
-        let a = prev;
-        let b = Fp::one().neg();
+}
 
-        leaves.push(Nullifier(a));
-        leaves.push(Nullifier(b));
-    }
-    leaves
+pub fn cmx_hash(level: u8, left: Fp, right: Fp) -> Fp {
+    let left = MerkleHashOrchard::from_base(left);
+    let right = MerkleHashOrchard::from_base(right);
+    let h = MerkleHashOrchard::combine(incrementalmerkletree::Altitude::from(level), &left, &right);
+    h.inner()
 }
