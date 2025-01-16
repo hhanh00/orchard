@@ -32,7 +32,7 @@ fpe = "0.5"
 group = { version = "0.13", features = ["wnaf-memuse"] }
 halo2_gadgets = "0.2"
 halo2_proofs = { version = "0.2", default-features = false, features = ["batch", "floor-planner-v1-legacy-pdqsort"] }
-hex = { version = "0.4", features = ["serde"] }
+hex = "0.4"
 lazy_static = "1"
 memuse = { version = "0.2.1", features = ["nonempty"] }
 pasta_curves = "0.5"
@@ -76,6 +76,7 @@ default = ["multicore"]
 multicore = ["halo2_proofs/multicore"]
 dev-graph = ["halo2_proofs/dev-graph", "image", "plotters"]
 test-dependencies = ["proptest"]
+vote = ["hex/serde"]
 
 [[bench]]
 name = "note_decryption"
