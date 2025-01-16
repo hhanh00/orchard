@@ -229,7 +229,7 @@ pub(crate) fn derive_domain_nullifier<
         let poseidon_hasher =
             PoseidonHash::init(poseidon_chip_1, layouter.namespace(|| "Poseidon init"))?;
         poseidon_hasher.hash(
-            layouter.namespace(|| "Poseidon hash (nk, rho)"),
+            layouter.namespace(|| "Poseidon hash (domain, rho)"),
             poseidon_message,
         )
     }?;
@@ -240,7 +240,7 @@ pub(crate) fn derive_domain_nullifier<
         let poseidon_hasher =
             PoseidonHash::init(poseidon_chip_2, layouter.namespace(|| "Poseidon init"))?;
         poseidon_hasher.hash(
-            layouter.namespace(|| "Poseidon hash (nk, rho)"),
+            layouter.namespace(|| "Poseidon hash (nk, domain_rho)"),
             poseidon_message,
         )
     }?;
