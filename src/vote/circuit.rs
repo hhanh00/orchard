@@ -1,46 +1,40 @@
 //! The Orchard Action circuit implementation.
 
 use alloc::vec::Vec;
-
 use group::{Curve, GroupEncoding};
 use halo2_proofs::{
     circuit::{floor_planner, Layouter, Value},
-    plonk::{
-        self, Advice, BatchVerifier, Column, Constraints, Expression, Instance as InstanceColumn,
-        Selector, SingleVerifier,
-    },
+    plonk::{self, Advice, Column, Constraints, Expression, Instance as InstanceColumn, Selector},
     poly::Rotation,
-    transcript::{Blake2bRead, Blake2bWrite},
 };
-use pasta_curves::{arithmetic::CurveAffine, pallas, vesta};
-use rand::RngCore;
+use pasta_curves::{arithmetic::CurveAffine, pallas, vesta, Fp};
 
-use self::{
-    commit_ivk::{CommitIvkChip, CommitIvkConfig},
-    gadget::{
-        add_chip::{AddChip, AddConfig},
-        assign_free_advice,
-    },
-    note_commit::{NoteCommitChip, NoteCommitConfig},
-};
 use crate::{
     builder::SpendInfo,
     constants::{
-        OrchardCommitDomains, OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains,
-        MERKLE_DEPTH_ORCHARD,
+        MERKLE_DEPTH_ORCHARD, OrchardCommitDomains, OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains
     },
     keys::{
         CommitIvkRandomness, DiversifiedTransmissionKey, NullifierDerivingKey, SpendValidatingKey,
     },
     note::{
-        commitment::{NoteCommitTrapdoor, NoteCommitment},
-        nullifier::Nullifier,
-        ExtractedNoteCommitment, Note, Rho,
+        ExtractedNoteCommitment, Note, Rho, commitment::{NoteCommitTrapdoor, NoteCommitment}, nullifier::Nullifier
     },
     primitives::redpallas::{SpendAuth, VerificationKey},
     spec::NonIdentityPallasPoint,
     tree::{Anchor, MerkleHashOrchard},
     value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
+};
+use crate::{
+    circuit::{
+        commit_ivk::{CommitIvkChip, CommitIvkConfig},
+        gadget::{
+            add_chip::{AddChip, AddConfig},
+            assign_free_advice, commit_ivk, derive_nullifier, note_commit, value_commit_orchard,
+        },
+        note_commit::{NoteCommitChip, NoteCommitConfig},
+    },
+    vote::interval::{IntervalChip, IntervalChipConfig},
 };
 use halo2_gadgets::{
     ecc::{
@@ -58,25 +52,46 @@ use halo2_gadgets::{
     utilities::lookup_range_check::LookupRangeCheckConfig,
 };
 
-pub mod commit_ivk;
-pub mod gadget;
-pub mod note_commit;
-
-pub use crate::Proof;
+use super::proof::Halo2Instance;
 
 /// Size of the Orchard circuit.
-const K: u32 = 11;
+const K: u32 = 12;
 
 // Absolute offsets for public inputs.
 const ANCHOR: usize = 0;
 const CV_NET_X: usize = 1;
 const CV_NET_Y: usize = 2;
-const NF_OLD: usize = 3;
+const DOMAIN_NF: usize = 3;
 const RK_X: usize = 4;
 const RK_Y: usize = 5;
 const CMX: usize = 6;
-const ENABLE_SPEND: usize = 7;
-const ENABLE_OUTPUT: usize = 8;
+const NF_ANCHOR: usize = 7;
+const DOMAIN: usize = 8;
+
+///
+#[derive(Clone, Debug)]
+pub struct VotePowerInfo {
+    ///
+    pub dnf: Nullifier,
+    ///
+    pub nf_start: Nullifier,
+    ///
+    pub nf_path: crate::tree::MerklePath,
+}
+
+impl VotePowerInfo {
+    pub(crate) fn from_parts(
+        dnf: Nullifier,
+        nf_start: Nullifier,
+        nf_path: crate::tree::MerklePath,
+    ) -> Self {
+        VotePowerInfo {
+            dnf,
+            nf_start,
+            nf_path,
+        }
+    }
+}
 
 /// Configuration needed to use the Orchard Action circuit.
 #[derive(Clone, Debug)]
@@ -96,59 +111,91 @@ pub struct Config {
     commit_ivk_config: CommitIvkConfig,
     old_note_commit_config: NoteCommitConfig,
     new_note_commit_config: NoteCommitConfig,
+    nf_interval_config: IntervalChipConfig,
+}
+
+impl Config {
+    pub(crate) fn add_chip(&self) -> AddChip {
+        AddChip::construct(self.add_config.clone())
+    }
+
+    pub(crate) fn commit_ivk_chip(&self) -> CommitIvkChip {
+        CommitIvkChip::construct(self.commit_ivk_config.clone())
+    }
+
+    pub(crate) fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
+        EccChip::construct(self.ecc_config.clone())
+    }
+
+    pub(crate) fn sinsemilla_chip_1(
+        &self,
+    ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
+        SinsemillaChip::construct(self.sinsemilla_config_1.clone())
+    }
+
+    pub(crate) fn sinsemilla_chip_2(
+        &self,
+    ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
+        SinsemillaChip::construct(self.sinsemilla_config_2.clone())
+    }
+
+    pub(crate) fn merkle_chip_1(
+        &self,
+    ) -> MerkleChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
+        MerkleChip::construct(self.merkle_config_1.clone())
+    }
+
+    pub(crate) fn merkle_chip_2(
+        &self,
+    ) -> MerkleChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
+        MerkleChip::construct(self.merkle_config_2.clone())
+    }
+
+    pub(crate) fn poseidon_chip(&self) -> PoseidonChip<pallas::Base, 3, 2> {
+        PoseidonChip::construct(self.poseidon_config.clone())
+    }
+
+    pub(crate) fn note_commit_chip_new(&self) -> NoteCommitChip {
+        NoteCommitChip::construct(self.new_note_commit_config.clone())
+    }
+
+    pub(crate) fn note_commit_chip_old(&self) -> NoteCommitChip {
+        NoteCommitChip::construct(self.old_note_commit_config.clone())
+    }
 }
 
 /// The Orchard Action circuit.
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
-    pub(crate) path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
-    pub(crate) pos: Value<u32>,
-    pub(crate) g_d_old: Value<NonIdentityPallasPoint>,
-    pub(crate) pk_d_old: Value<DiversifiedTransmissionKey>,
-    pub(crate) v_old: Value<NoteValue>,
-    pub(crate) rho_old: Value<Rho>,
-    pub(crate) psi_old: Value<pallas::Base>,
-    pub(crate) rcm_old: Value<NoteCommitTrapdoor>,
-    pub(crate) cm_old: Value<NoteCommitment>,
-    pub(crate) alpha: Value<pallas::Scalar>,
-    pub(crate) ak: Value<SpendValidatingKey>,
-    pub(crate) nk: Value<NullifierDerivingKey>,
-    pub(crate) rivk: Value<CommitIvkRandomness>,
-    pub(crate) g_d_new: Value<NonIdentityPallasPoint>,
-    pub(crate) pk_d_new: Value<DiversifiedTransmissionKey>,
-    pub(crate) v_new: Value<NoteValue>,
-    pub(crate) psi_new: Value<pallas::Base>,
-    pub(crate) rcm_new: Value<NoteCommitTrapdoor>,
-    pub(crate) rcv: Value<ValueCommitTrapdoor>,
+    path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
+    pos: Value<u32>,
+    g_d_old: Value<NonIdentityPallasPoint>,
+    pk_d_old: Value<DiversifiedTransmissionKey>,
+    v_old: Value<NoteValue>,
+    rho_old: Value<Rho>,
+    psi_old: Value<pallas::Base>,
+    rcm_old: Value<NoteCommitTrapdoor>,
+    nf_old: Value<Nullifier>,
+    nf_start: Value<Nullifier>,
+    nf_path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
+    nf_pos: Value<u32>,
+    cm_old: Value<NoteCommitment>,
+    alpha: Value<pallas::Scalar>,
+    ak: Value<SpendValidatingKey>,
+    nk: Value<NullifierDerivingKey>,
+    rivk: Value<CommitIvkRandomness>,
+    g_d_new: Value<NonIdentityPallasPoint>,
+    pk_d_new: Value<DiversifiedTransmissionKey>,
+    v_new: Value<NoteValue>,
+    psi_new: Value<pallas::Base>,
+    rcm_new: Value<NoteCommitTrapdoor>,
+    rcv: Value<ValueCommitTrapdoor>,
 }
 
 impl Circuit {
-    /// This constructor is public to enable creation of custom builders.
-    /// If you are not creating a custom builder, use [`Builder`] to compose
-    /// and authorize a transaction.
     ///
-    /// Constructs a `Circuit` from the following components:
-    /// - `spend`: [`SpendInfo`] of the note spent in scope of the action
-    /// - `output_note`: a note created in scope of the action
-    /// - `alpha`: a scalar used for randomization of the action spend validating key
-    /// - `rcv`: trapdoor for the action value commitment
-    ///
-    /// Returns `None` if the `rho` of the `output_note` is not equal
-    /// to the nullifier of the spent note.
-    ///
-    /// [`SpendInfo`]: crate::builder::SpendInfo
-    /// [`Builder`]: crate::builder::Builder
-    pub fn from_action_context(
-        spend: SpendInfo,
-        output_note: Note,
-        alpha: pallas::Scalar,
-        rcv: ValueCommitTrapdoor,
-    ) -> Option<Circuit> {
-        (Rho::from_nf_old(spend.note.nullifier(&spend.fvk)) == output_note.rho())
-            .then(|| Self::from_action_context_unchecked(spend, output_note, alpha, rcv))
-    }
-
-    pub(crate) fn from_action_context_unchecked(
+    pub fn from_action_context_unchecked(
+        vote_power: VotePowerInfo,
         spend: SpendInfo,
         output_note: Note,
         alpha: pallas::Scalar,
@@ -158,6 +205,7 @@ impl Circuit {
         let rho_old = spend.note.rho();
         let psi_old = spend.note.rseed().psi(&rho_old);
         let rcm_old = spend.note.rseed().rcm(&rho_old);
+        let nf_old = spend.note.nullifier(&spend.fvk);
 
         let rho_new = output_note.rho();
         let psi_new = output_note.rseed().psi(&rho_new);
@@ -172,6 +220,10 @@ impl Circuit {
             rho_old: Value::known(rho_old),
             psi_old: Value::known(psi_old),
             rcm_old: Value::known(rcm_old),
+            nf_old: Value::known(nf_old),
+            nf_start: Value::known(vote_power.nf_start),
+            nf_path: Value::known(vote_power.nf_path.auth_path()),
+            nf_pos: Value::known(vote_power.nf_path.position()),
             cm_old: Value::known(spend.note.commitment()),
             alpha: Value::known(alpha),
             ak: Value::known(spend.fvk.clone().into()),
@@ -212,8 +264,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // Constrain v_old - v_new = magnitude * sign    (https://p.z.cash/ZKS:action-cv-net-integrity?partial).
         // Either v_old = 0, or calculated root = anchor (https://p.z.cash/ZKS:action-merkle-path-validity?partial).
-        // Constrain v_old = 0 or enable_spends = 1      (https://p.z.cash/ZKS:action-enable-spend).
-        // Constrain v_new = 0 or enable_outputs = 1     (https://p.z.cash/ZKS:action-enable-output).
+        // Constrain calculated nf_root = nf_anchor
+        // Constrain nf_pos even
         let q_orchard = meta.selector();
         meta.create_gate("Orchard circuit checks", |meta| {
             let q_orchard = meta.query_selector(q_orchard);
@@ -225,9 +277,21 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             let root = meta.query_advice(advices[4], Rotation::cur());
             let anchor = meta.query_advice(advices[5], Rotation::cur());
 
-            let enable_spends = meta.query_advice(advices[6], Rotation::cur());
-            let enable_outputs = meta.query_advice(advices[7], Rotation::cur());
+            let nf_root = meta.query_advice(advices[6], Rotation::cur());
+            let nf_anchor = meta.query_advice(advices[7], Rotation::cur());
 
+            // The constraint "nf_pos is even" checks that nf_start is the beginning
+            // of a nf interval (and not the end)
+            // However, it is technically not necessary because nf_end is
+            // the first item of the Merkle Authorization Path and therefore
+            // is the sibling of nf_start
+            // If nf_start were the end of the range, nf_end would be the beginning
+            // and the range check would fail
+            // For clarity, the constraint is still explicitly efforced by the circuit
+            let nf_pos = meta.query_advice(advices[8], Rotation::cur());
+            let nf_pos_half = meta.query_advice(advices[9], Rotation::cur());
+
+            let nf_in_range = meta.query_advice(advices[0], Rotation::next());
             let one = Expression::Constant(pallas::Base::one());
 
             Constraints::with_selector(
@@ -242,13 +306,14 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                         v_old.clone() * (root - anchor),
                     ),
                     (
-                        "v_old = 0 or enable_spends = 1",
-                        v_old * (one.clone() - enable_spends),
+                        "Either v_old = 0, or nf root = anchor",
+                        v_old.clone() * (nf_root - nf_anchor),
                     ),
                     (
-                        "v_new = 0 or enable_outputs = 1",
-                        v_new * (one - enable_outputs),
+                        "Either v_old = 0, or nf_in_range",
+                        v_old.clone() * (one - nf_in_range),
                     ),
+                    ("nf_pos is even", nf_pos - nf_pos_half.clone() - nf_pos_half),
                 ],
             )
         });
@@ -365,6 +430,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         let new_note_commit_config =
             NoteCommitChip::configure(meta, advices, sinsemilla_config_2.clone());
 
+        let nf_interval_config =
+            IntervalChip::configure(meta, advices[0], advices[1], advices[2], lookup.0);
+
         Config {
             primary,
             q_orchard,
@@ -379,6 +447,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             commit_ivk_config,
             old_note_commit_config,
             new_note_commit_config,
+            nf_interval_config,
         }
     }
 
@@ -394,8 +463,37 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // Construct the ECC chip.
         let ecc_chip = config.ecc_chip();
 
+        let nf_interval = IntervalChip::construct(config.nf_interval_config.clone());
+
         // Witness private inputs that are used across multiple checks.
-        let (psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, v_new) = {
+        let (
+            domain,
+            psi_old,
+            rho_old,
+            cm_old,
+            g_d_old,
+            ak_P,
+            nk,
+            v_old,
+            v_new,
+            nf_pos,
+            nf_start,
+            nf_end,
+        ) = {
+            // Witness election domain
+            let domain = layouter.assign_region(
+                || "copy domain",
+                |mut region| {
+                    region.assign_advice_from_instance(
+                        || "instance domain",
+                        config.primary,
+                        DOMAIN,
+                        config.advices[0],
+                        0,
+                    )
+                },
+            )?;
+
             // Witness psi_old
             let psi_old = assign_free_advice(
                 layouter.namespace(|| "witness psi_old"),
@@ -453,7 +551,35 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 self.v_new,
             )?;
 
-            (psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, v_new)
+            // Witness nf_pos.
+            let nf_pos = assign_free_advice(
+                layouter.namespace(|| "witness nf_pos"),
+                config.advices[0],
+                self.nf_pos.map(|pos| pallas::Base::from(pos as u64)),
+            )?;
+
+            // Witness nf_start.
+            let nf_start = assign_free_advice(
+                layouter.namespace(|| "witness nf_start"),
+                config.advices[0],
+                self.nf_start.map(|nf| nf.0),
+            )?;
+
+            // Witness nf_end as the first level of the Merkle path
+            // By construction of the exclusion nullifier MT,
+            // Leaves of the tree are pairs of nf_start, nf_end,
+            // therefore nf_start is always the left node and
+            // nf_end the sibling
+            let nf_end = assign_free_advice(
+                layouter.namespace(|| "witness nf_end"),
+                config.advices[0],
+                self.nf_path.map(|p| p[0].0),
+            )?;
+
+            (
+                domain, psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, v_new, nf_pos,
+                nf_start, nf_end,
+            )
         };
 
         // Merkle path validity check (https://p.z.cash/ZKS:action-merkle-path-validity?partial).
@@ -468,6 +594,21 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 path,
             );
             let leaf = cm_old.extract_p().inner().clone();
+            merkle_inputs.calculate_root(layouter.namespace(|| "Merkle path"), leaf)?
+        };
+
+        // nullifier Merkle path validity check
+        let nf_root = {
+            let nf_path = self
+                .nf_path
+                .map(|typed_path| typed_path.map(|node| node.inner()));
+            let merkle_inputs = MerklePath::construct(
+                [config.merkle_chip_1(), config.merkle_chip_2()],
+                OrchardHashDomains::MerkleCrh,
+                self.nf_pos,
+                nf_path,
+            );
+            let leaf = nf_start.clone();
             merkle_inputs.calculate_root(layouter.namespace(|| "Merkle path"), leaf)?
         };
 
@@ -514,7 +655,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 self.rcv.as_ref().map(|rcv| rcv.inner()),
             )?;
 
-            let cv_net = gadget::value_commit_orchard(
+            let cv_net = value_commit_orchard(
                 layouter.namespace(|| "cv_net = ValueCommit^Orchard_rcv(v_net)"),
                 ecc_chip.clone(),
                 v_net,
@@ -531,7 +672,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // Nullifier integrity (https://p.z.cash/ZKS:action-nullifier-integrity).
         let nf_old = {
-            let nf_old = gadget::derive_nullifier(
+            let nf_old = derive_nullifier(
                 layouter.namespace(|| "nf_old = DeriveNullifier_nk(rho_old, psi_old, cm_old)"),
                 config.poseidon_chip(),
                 config.add_chip(),
@@ -542,10 +683,29 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 nk.clone(),
             )?;
 
-            // Constrain nf_old to equal public input
-            layouter.constrain_instance(nf_old.inner().cell(), config.primary, NF_OLD)?;
-
             nf_old
+        };
+
+        // Domain Nullifier integrity
+        let dnf = {
+            let dnf = crate::circuit::gadget::derive_domain_nullifier(
+                layouter.namespace(|| {
+                    "domain_nf = DeriveNullifier_domain_nk(rho_old, psi_old, cm_old)"
+                }),
+                config.poseidon_chip(),
+                config.poseidon_chip(),
+                config.add_chip(),
+                ecc_chip.clone(),
+                domain.clone(),
+                rho_old.clone(),
+                &psi_old,
+                &cm_old,
+                nk.clone(),
+            )?;
+
+            // Constrain dnf_old to equal public input
+            layouter.constrain_instance(dnf.inner().cell(), config.primary, DOMAIN_NF)?;
+            dnf
         };
 
         // Spend authority (https://p.z.cash/ZKS:action-spend-authority)
@@ -578,7 +738,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     self.rivk.map(|rivk| rivk.inner()),
                 )?;
 
-                gadget::commit_ivk(
+                commit_ivk(
                     config.sinsemilla_chip_1(),
                     ecc_chip.clone(),
                     config.commit_ivk_chip(),
@@ -623,7 +783,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )?;
 
             // g★_d || pk★_d || i2lebsp_{64}(v) || i2lebsp_{255}(rho) || i2lebsp_{255}(psi)
-            let derived_cm_old = gadget::note_commit(
+            let derived_cm_old = note_commit(
                 layouter.namespace(|| {
                     "g★_d || pk★_d || i2lebsp_{64}(v) || i2lebsp_{255}(rho) || i2lebsp_{255}(psi)"
                 }),
@@ -664,8 +824,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 )?
             };
 
-            // ρ^new = nf^old
-            let rho_new = nf_old.inner().clone();
+            // ρ^new = dnf^old
+            let rho_new = dnf.inner().clone();
 
             // Witness psi_new
             let psi_new = assign_free_advice(
@@ -681,7 +841,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )?;
 
             // g★_d || pk★_d || i2lebsp_{64}(v) || i2lebsp_{255}(rho) || i2lebsp_{255}(psi)
-            let cm_new = gadget::note_commit(
+            let cm_new = note_commit(
                 layouter.namespace(|| {
                     "g★_d || pk★_d || i2lebsp_{64}(v) || i2lebsp_{255}(rho) || i2lebsp_{255}(psi)"
                 }),
@@ -701,6 +861,14 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             // Constrain cmx to equal public input
             layouter.constrain_instance(cmx.inner().cell(), config.primary, CMX)?;
         }
+
+        // Range constraint on nf_old
+        let nf_in_range = nf_interval.check_in_interval(
+            layouter.namespace(|| "nf in [nf_start, nf_end]"),
+            nf_old.inner().clone(),
+            nf_start,
+            nf_end,
+        )?;
 
         // Constrain the remaining Orchard circuit checks.
         layouter.assign_region(
@@ -730,23 +898,22 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     0,
                 )?;
 
+                nf_root.copy_advice(|| "calculated nf_root", &mut region, config.advices[6], 0)?;
                 region.assign_advice_from_instance(
-                    || "enable spends",
+                    || "pub input nullifier anchor",
                     config.primary,
-                    ENABLE_SPEND,
-                    config.advices[6],
-                    0,
-                )?;
-
-                region.assign_advice_from_instance(
-                    || "enable outputs",
-                    config.primary,
-                    ENABLE_OUTPUT,
+                    NF_ANCHOR,
                     config.advices[7],
                     0,
                 )?;
+                nf_pos.copy_advice(|| "nf_pos", &mut region, config.advices[8], 0)?;
+                let nf_pos_half = self.nf_pos.map(|v| pallas::Base::from((v / 2) as u64));
+                region.assign_advice(|| "half nf_pos", config.advices[9], 0, || nf_pos_half)?;
 
-                config.q_orchard.enable(&mut region, 0)
+                nf_in_range.copy_advice(|| "nf_in_range", &mut region, config.advices[0], 1)?;
+
+                config.q_orchard.enable(&mut region, 0)?;
+                Ok(())
             },
         )?;
 
@@ -754,55 +921,16 @@ impl plonk::Circuit<pallas::Base> for Circuit {
     }
 }
 
-/// The verifying key for the Orchard Action circuit.
-#[derive(Debug)]
-pub struct VerifyingKey {
-    pub(crate) params: halo2_proofs::poly::commitment::Params<vesta::Affine>,
-    pub(crate) vk: plonk::VerifyingKey<vesta::Affine>,
-}
-
-impl VerifyingKey {
-    /// Builds the verifying key.
-    pub fn build() -> Self {
-        let params = halo2_proofs::poly::commitment::Params::new(K);
-        let circuit: Circuit = Default::default();
-
-        let vk = plonk::keygen_vk(&params, &circuit).unwrap();
-
-        VerifyingKey { params, vk }
-    }
-}
-
-/// The proving key for the Orchard Action circuit.
-#[derive(Debug)]
-pub struct ProvingKey {
-    params: halo2_proofs::poly::commitment::Params<vesta::Affine>,
-    pk: plonk::ProvingKey<vesta::Affine>,
-}
-
-impl ProvingKey {
-    /// Builds the proving key.
-    pub fn build() -> Self {
-        let params = halo2_proofs::poly::commitment::Params::new(K);
-        let circuit: Circuit = Default::default();
-
-        let vk = plonk::keygen_vk(&params, &circuit).unwrap();
-        let pk = plonk::keygen_pk(&params, vk, &circuit).unwrap();
-
-        ProvingKey { params, pk }
-    }
-}
-
 /// Public inputs to the Orchard Action circuit.
 #[derive(Clone, Debug)]
 pub struct Instance {
-    pub(crate) anchor: Anchor,
-    pub(crate) cv_net: ValueCommitment,
-    pub(crate) nf_old: Nullifier,
-    pub(crate) rk: VerificationKey<SpendAuth>,
-    pub(crate) cmx: ExtractedNoteCommitment,
-    pub(crate) enable_spend: bool,
-    pub(crate) enable_output: bool,
+    domain: Fp,
+    anchor: Anchor,
+    cv_net: ValueCommitment,
+    dnf: Nullifier,
+    rk: VerificationKey<SpendAuth>,
+    cmx: ExtractedNoteCommitment,
+    nf_anchor: Anchor,
 }
 
 impl Instance {
@@ -816,30 +944,32 @@ impl Instance {
     pub fn from_parts(
         anchor: Anchor,
         cv_net: ValueCommitment,
-        nf_old: Nullifier,
+        dnf: Nullifier,
         rk: VerificationKey<SpendAuth>,
         cmx: ExtractedNoteCommitment,
-        enable_spend: bool,
-        enable_output: bool,
+        domain: Fp,
+        nf_anchor: Anchor,
     ) -> Self {
         Instance {
             anchor,
             cv_net,
-            nf_old,
+            dnf,
             rk,
             cmx,
-            enable_spend,
-            enable_output,
+            domain,
+            nf_anchor,
         }
     }
+}
 
-    fn to_halo2_instance(&self) -> [[vesta::Scalar; 9]; 1] {
-        let mut instance = [vesta::Scalar::zero(); 9];
+impl Halo2Instance for Instance {
+    fn to_halo2_instance(&self) -> Vec<vesta::Scalar> {
+        let mut instance = vec![vesta::Scalar::zero(); 9];
 
         instance[ANCHOR] = self.anchor.inner();
         instance[CV_NET_X] = self.cv_net.x();
         instance[CV_NET_Y] = self.cv_net.y();
-        instance[NF_OLD] = self.nf_old.0;
+        instance[DOMAIN_NF] = self.dnf.0;
 
         let rk = pallas::Point::from_bytes(&self.rk.clone().into())
             .unwrap()
@@ -850,327 +980,15 @@ impl Instance {
         instance[RK_X] = *rk.x();
         instance[RK_Y] = *rk.y();
         instance[CMX] = self.cmx.inner();
-        instance[ENABLE_SPEND] = vesta::Scalar::from(u64::from(self.enable_spend));
-        instance[ENABLE_OUTPUT] = vesta::Scalar::from(u64::from(self.enable_output));
 
-        [instance]
+        instance[DOMAIN] = self.domain;
+        instance[NF_ANCHOR] = self.nf_anchor.inner();
+
+        instance
     }
 }
 
-impl Proof {
-    /// Creates a proof for the given circuits and instances.
-    pub fn create(
-        pk: &ProvingKey,
-        circuits: &[Circuit],
-        instances: &[Instance],
-        mut rng: impl RngCore,
-    ) -> Result<Self, plonk::Error> {
-        let instances: Vec<_> = instances.iter().map(|i| i.to_halo2_instance()).collect();
-        let instances: Vec<Vec<_>> = instances
-            .iter()
-            .map(|i| i.iter().map(|c| &c[..]).collect())
-            .collect();
-        let instances: Vec<_> = instances.iter().map(|i| &i[..]).collect();
-
-        let mut transcript = Blake2bWrite::<_, vesta::Affine, _>::init(vec![]);
-        plonk::create_proof(
-            &pk.params,
-            &pk.pk,
-            circuits,
-            &instances,
-            &mut rng,
-            &mut transcript,
-        )?;
-        Ok(Proof(transcript.finalize()))
-    }
-
-    /// Verifies this proof with the given instances.
-    pub fn verify(&self, vk: &VerifyingKey, instances: &[Instance]) -> Result<(), plonk::Error> {
-        let instances: Vec<_> = instances.iter().map(|i| i.to_halo2_instance()).collect();
-        let instances: Vec<Vec<_>> = instances
-            .iter()
-            .map(|i| i.iter().map(|c| &c[..]).collect())
-            .collect();
-        let instances: Vec<_> = instances.iter().map(|i| &i[..]).collect();
-
-        let strategy = SingleVerifier::new(&vk.params);
-        let mut transcript = Blake2bRead::init(&self.0[..]);
-        plonk::verify_proof(&vk.params, &vk.vk, strategy, &instances, &mut transcript)
-    }
-
-    /// Adds this proof to the given batch for verification with the given instances.
-    ///
-    /// Use this API if you want more control over how proof batches are processed. If you
-    /// just want to batch-validate Orchard bundles, use [`bundle::BatchValidator`].
-    ///
-    /// [`bundle::BatchValidator`]: crate::bundle::BatchValidator
-    pub fn add_to_batch(&self, batch: &mut BatchVerifier<vesta::Affine>, instances: Vec<Instance>) {
-        let instances = instances
-            .iter()
-            .map(|i| {
-                i.to_halo2_instance()
-                    .into_iter()
-                    .map(|c| c.into_iter().collect())
-                    .collect()
-            })
-            .collect();
-
-        batch.add_proof(instances, self.0.clone());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use alloc::vec::Vec;
-    use core::iter;
-
-    use ff::Field;
-    use halo2_proofs::{circuit::Value, dev::MockProver};
-    use pasta_curves::pallas;
-    use rand::{rngs::OsRng, RngCore};
-
-    use super::{Circuit, Instance, Proof, ProvingKey, VerifyingKey, K};
-    use crate::{
-        keys::SpendValidatingKey,
-        note::{Note, Rho},
-        tree::MerklePath,
-        value::{ValueCommitTrapdoor, ValueCommitment},
-    };
-
-    fn generate_circuit_instance<R: RngCore>(mut rng: R) -> (Circuit, Instance) {
-        let (_, fvk, spent_note) = Note::dummy(&mut rng, None);
-
-        let sender_address = spent_note.recipient();
-        let nk = *fvk.nk();
-        let rivk = fvk.rivk(fvk.scope_for_address(&spent_note.recipient()).unwrap());
-        let nf_old = spent_note.nullifier(&fvk);
-        let rho = Rho::from_nf_old(nf_old);
-        let ak: SpendValidatingKey = fvk.into();
-        let alpha = pallas::Scalar::random(&mut rng);
-        let rk = ak.randomize(&alpha);
-
-        let (_, _, output_note) = Note::dummy(&mut rng, Some(rho));
-        let cmx = output_note.commitment().into();
-
-        let value = spent_note.value() - output_note.value();
-        let rcv = ValueCommitTrapdoor::random(&mut rng);
-        let cv_net = ValueCommitment::derive(value, rcv.clone());
-
-        let path = MerklePath::dummy(&mut rng);
-        let anchor = path.root(spent_note.commitment().into());
-
-        (
-            Circuit {
-                path: Value::known(path.auth_path()),
-                pos: Value::known(path.position()),
-                g_d_old: Value::known(sender_address.g_d()),
-                pk_d_old: Value::known(*sender_address.pk_d()),
-                v_old: Value::known(spent_note.value()),
-                rho_old: Value::known(spent_note.rho()),
-                psi_old: Value::known(spent_note.rseed().psi(&spent_note.rho())),
-                rcm_old: Value::known(spent_note.rseed().rcm(&spent_note.rho())),
-                cm_old: Value::known(spent_note.commitment()),
-                alpha: Value::known(alpha),
-                ak: Value::known(ak),
-                nk: Value::known(nk),
-                rivk: Value::known(rivk),
-                g_d_new: Value::known(output_note.recipient().g_d()),
-                pk_d_new: Value::known(*output_note.recipient().pk_d()),
-                v_new: Value::known(output_note.value()),
-                psi_new: Value::known(output_note.rseed().psi(&output_note.rho())),
-                rcm_new: Value::known(output_note.rseed().rcm(&output_note.rho())),
-                rcv: Value::known(rcv),
-            },
-            Instance {
-                anchor,
-                cv_net,
-                nf_old,
-                rk,
-                cmx,
-                enable_spend: true,
-                enable_output: true,
-            },
-        )
-    }
-
-    // TODO: recast as a proptest
-    #[test]
-    fn round_trip() {
-        let mut rng = OsRng;
-
-        let (circuits, instances): (Vec<_>, Vec<_>) = iter::once(())
-            .map(|()| generate_circuit_instance(&mut rng))
-            .unzip();
-
-        let vk = VerifyingKey::build();
-
-        // Test that the pinned verification key (representing the circuit)
-        // is as expected.
-        {
-            // panic!("{:#?}", vk.vk.pinned());
-            assert_eq!(
-                format!("{:#?}\n", vk.vk.pinned()),
-                include_str!("circuit_description").replace("\r\n", "\n")
-            );
-        }
-
-        // Test that the proof size is as expected.
-        let expected_proof_size = {
-            let circuit_cost =
-                halo2_proofs::dev::CircuitCost::<pasta_curves::vesta::Point, _>::measure(
-                    K,
-                    &circuits[0],
-                );
-            assert_eq!(usize::from(circuit_cost.proof_size(1)), 4992);
-            assert_eq!(usize::from(circuit_cost.proof_size(2)), 7264);
-            usize::from(circuit_cost.proof_size(instances.len()))
-        };
-
-        for (circuit, instance) in circuits.iter().zip(instances.iter()) {
-            assert_eq!(
-                MockProver::run(
-                    K,
-                    circuit,
-                    instance
-                        .to_halo2_instance()
-                        .iter()
-                        .map(|p| p.to_vec())
-                        .collect()
-                )
-                .unwrap()
-                .verify(),
-                Ok(())
-            );
-        }
-
-        let pk = ProvingKey::build();
-        let proof = Proof::create(&pk, &circuits, &instances, &mut rng).unwrap();
-        assert!(proof.verify(&vk, &instances).is_ok());
-        assert_eq!(proof.0.len(), expected_proof_size);
-    }
-
-    #[test]
-    fn serialized_proof_test_case() {
-        use std::io::{Read, Write};
-
-        let vk = VerifyingKey::build();
-
-        fn write_test_case<W: Write>(
-            mut w: W,
-            instance: &Instance,
-            proof: &Proof,
-        ) -> std::io::Result<()> {
-            w.write_all(&instance.anchor.to_bytes())?;
-            w.write_all(&instance.cv_net.to_bytes())?;
-            w.write_all(&instance.nf_old.to_bytes())?;
-            w.write_all(&<[u8; 32]>::from(instance.rk.clone()))?;
-            w.write_all(&instance.cmx.to_bytes())?;
-            w.write_all(&[
-                u8::from(instance.enable_spend),
-                u8::from(instance.enable_output),
-            ])?;
-
-            w.write_all(proof.as_ref())?;
-            Ok(())
-        }
-
-        fn read_test_case<R: Read>(mut r: R) -> std::io::Result<(Instance, Proof)> {
-            let read_32_bytes = |r: &mut R| {
-                let mut ret = [0u8; 32];
-                r.read_exact(&mut ret).unwrap();
-                ret
-            };
-            let read_bool = |r: &mut R| {
-                let mut byte = [0u8; 1];
-                r.read_exact(&mut byte).unwrap();
-                match byte {
-                    [0] => false,
-                    [1] => true,
-                    _ => panic!("Unexpected non-boolean byte"),
-                }
-            };
-
-            let anchor = crate::Anchor::from_bytes(read_32_bytes(&mut r)).unwrap();
-            let cv_net = ValueCommitment::from_bytes(&read_32_bytes(&mut r)).unwrap();
-            let nf_old = crate::note::Nullifier::from_bytes(&read_32_bytes(&mut r)).unwrap();
-            let rk = read_32_bytes(&mut r).try_into().unwrap();
-            let cmx =
-                crate::note::ExtractedNoteCommitment::from_bytes(&read_32_bytes(&mut r)).unwrap();
-            let enable_spend = read_bool(&mut r);
-            let enable_output = read_bool(&mut r);
-            let instance =
-                Instance::from_parts(anchor, cv_net, nf_old, rk, cmx, enable_spend, enable_output);
-
-            let mut proof_bytes = vec![];
-            r.read_to_end(&mut proof_bytes)?;
-            let proof = Proof::new(proof_bytes);
-
-            Ok((instance, proof))
-        }
-
-        if std::env::var_os("ORCHARD_CIRCUIT_TEST_GENERATE_NEW_PROOF").is_some() {
-            let create_proof = || -> std::io::Result<()> {
-                let mut rng = OsRng;
-
-                let (circuit, instance) = generate_circuit_instance(OsRng);
-                let instances = &[instance.clone()];
-
-                let pk = ProvingKey::build();
-                let proof = Proof::create(&pk, &[circuit], instances, &mut rng).unwrap();
-                assert!(proof.verify(&vk, instances).is_ok());
-
-                let file = std::fs::File::create("circuit_proof_test_case.bin")?;
-                write_test_case(file, &instance, &proof)
-            };
-            create_proof().expect("should be able to write new proof");
-        }
-
-        // Parse the hardcoded proof test case.
-        let (instance, proof) = {
-            let test_case_bytes = include_bytes!("circuit_proof_test_case.bin");
-            read_test_case(&test_case_bytes[..]).expect("proof must be valid")
-        };
-        assert_eq!(proof.0.len(), 4992);
-
-        assert!(proof.verify(&vk, &[instance]).is_ok());
-    }
-
-    #[cfg(feature = "dev-graph")]
-    #[test]
-    fn print_action_circuit() {
-        use plotters::prelude::*;
-
-        let root = BitMapBackend::new("action-circuit-layout.png", (1024, 768)).into_drawing_area();
-        root.fill(&WHITE).unwrap();
-        let root = root
-            .titled("Orchard Action Circuit", ("sans-serif", 60))
-            .unwrap();
-
-        let circuit = Circuit {
-            path: Value::unknown(),
-            pos: Value::unknown(),
-            g_d_old: Value::unknown(),
-            pk_d_old: Value::unknown(),
-            v_old: Value::unknown(),
-            rho_old: Value::unknown(),
-            psi_old: Value::unknown(),
-            rcm_old: Value::unknown(),
-            cm_old: Value::unknown(),
-            alpha: Value::unknown(),
-            ak: Value::unknown(),
-            nk: Value::unknown(),
-            rivk: Value::unknown(),
-            g_d_new: Value::unknown(),
-            pk_d_new: Value::unknown(),
-            v_new: Value::unknown(),
-            psi_new: Value::unknown(),
-            rcm_new: Value::unknown(),
-            rcv: Value::unknown(),
-        };
-        halo2_proofs::dev::CircuitLayout::default()
-            .show_labels(false)
-            .view_height(0..(1 << 11))
-            .render(K, &circuit, &root)
-            .unwrap();
-    }
+impl super::proof::Statement for Circuit {
+    type Circuit = Circuit;
+    type Instance = Instance;
 }
