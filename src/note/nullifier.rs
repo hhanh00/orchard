@@ -60,6 +60,26 @@ impl Nullifier {
 
         Nullifier(extract_p(&(k * mod_r_p(nk.prf_nf(rho) + psi) + cm.0)))
     }
+
+    ///
+    pub(super) fn derive_domain(
+        nk: &NullifierDerivingKey,
+        domain: pallas::Base,
+        rho: pallas::Base,
+        psi: pallas::Base,
+        cm: NoteCommitment,
+    ) -> Self {
+        let k = pallas::Point::hash_to_curve("z.cash:Orchard")(b"K");
+
+        Nullifier(extract_p(
+            &(k * mod_r_p(nk.prf_nf_domain(rho, domain) + psi) + cm.0),
+        ))
+    }
+
+    ///
+    pub fn empty() -> Self {
+        Nullifier(pallas::Base::zero())
+    }
 }
 
 /// Generators for property testing.

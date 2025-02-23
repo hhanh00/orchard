@@ -231,6 +231,11 @@ impl NullifierDerivingKey {
         prf_nf(self.0, rho)
     }
 
+    pub(crate) fn prf_nf_domain(&self, domain: pallas::Base, rho: pallas::Base) -> pallas::Base {
+        let domain_rho = prf_nf(domain, rho);
+        prf_nf(self.0, domain_rho)
+    }
+
     /// Converts this nullifier deriving key to its serialized form.
     pub(crate) fn to_bytes(self) -> [u8; 32] {
         <[u8; 32]>::from(self.0)
@@ -829,11 +834,13 @@ impl EphemeralSecretKey {
         NonZeroPallasScalar::from_bytes(bytes).map(EphemeralSecretKey)
     }
 
-    pub(crate) fn derive_public(&self, g_d: NonIdentityPallasPoint) -> EphemeralPublicKey {
+    ///
+    pub fn derive_public(&self, g_d: NonIdentityPallasPoint) -> EphemeralPublicKey {
         EphemeralPublicKey(ka_orchard(&self.0, &g_d))
     }
 
-    pub(crate) fn agree(&self, pk_d: &DiversifiedTransmissionKey) -> SharedSecret {
+    ///
+    pub fn agree(&self, pk_d: &DiversifiedTransmissionKey) -> SharedSecret {
         SharedSecret(ka_orchard(&self.0, &pk_d.0))
     }
 }
@@ -918,7 +925,7 @@ impl SharedSecret {
     /// Defined in [Zcash Protocol Spec § 5.4.5.6: Orchard Key Agreement][concreteorchardkdf].
     ///
     /// [concreteorchardkdf]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkdf
-    pub(crate) fn kdf_orchard(self, ephemeral_key: &EphemeralKeyBytes) -> Blake2bHash {
+    pub fn kdf_orchard(self, ephemeral_key: &EphemeralKeyBytes) -> Blake2bHash {
         Self::kdf_orchard_inner(self.0.to_affine(), ephemeral_key)
     }
 

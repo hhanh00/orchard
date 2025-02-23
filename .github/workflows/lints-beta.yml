@@ -2,7 +2,10 @@ name: Nightly lints
 
 # These lints are only informative, so we only run them directly on branches
 # and not trial-merges of PRs, to reduce noise.
-on: push
+on:
+  push:
+    branches:
+      - main
 
 jobs:
   clippy-beta:
