@@ -2,7 +2,7 @@ use ff::PrimeField as _;
 use incrementalmerkletree::Hashable as _;
 use pasta_curves::Fp;
 
-use crate::tree::MerkleHashOrchard;
+use crate::{note::ExtractedNoteCommitment, tree::MerkleHashOrchard};
 
 use super::DEPTH;
 
@@ -64,6 +64,17 @@ pub fn calculate_merkle_paths(
     }
 
     let root = layer[0];
+
+    // Check the consistency between the merkle paths
+    // and the root
+    if cfg!(test)
+    {
+        for p in paths.iter() {
+            let mp = p.to_orchard_merkle_tree();
+            let mp_root = mp.root(ExtractedNoteCommitment::from_bytes(&p.value.to_repr()).unwrap());
+            assert_eq!(root, mp_root.inner());
+        }
+    }
     (root, paths)
 }
 

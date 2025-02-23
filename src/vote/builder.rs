@@ -5,17 +5,10 @@ use super::{
     },
     circuit::{Circuit, Instance, VotePowerInfo},
     path::calculate_merkle_paths,
-    proof::Proof,
-    proof::ProvingKey,
+    proof::{Proof, ProvingKey, VerifyingKey},
 };
 use crate::{
-    builder::SpendInfo,
-    keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey},
-    note::{ExtractedNoteCommitment, Nullifier, RandomSeed},
-    note_encryption::OrchardNoteEncryption,
-    primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey},
-    value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
-    Anchor, Note,
+    builder::SpendInfo, keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed}, note_encryption::OrchardNoteEncryption, primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey}, value::{NoteValue, ValueCommitTrapdoor, ValueCommitment}, Anchor, Note
 };
 use crate::{vote::util::as_byte256, Address};
 use pasta_curves::{
@@ -40,6 +33,7 @@ pub fn vote<R: RngCore + CryptoRng>(
     cmxs: &[Fp],
     mut rng: R,
     pk: &ProvingKey<Circuit>,
+    vk: &VerifyingKey<Circuit>,
 ) -> Result<Ballot, VoteError> {
     // let nfs = list_nf_ranges(connection)?;
     // let cmxs = list_cmxs(connection)?;
@@ -117,6 +111,12 @@ pub fn vote<R: RngCore + CryptoRng>(
             Err(position) => position - 1,
         } & !1); // snap to even position, ie start of range
         let nf_start = nfs[nf_position];
+        if nf_start > nf {
+            return Err(VoteError::InputError);
+        }
+        if nf > nfs[nf_position + 1] {
+            return Err(VoteError::InputError);
+        }
         ballot_secrets.push(BallotActionSecret {
             fvk: fvk.clone(),
             spend_note: spend.clone(),
@@ -189,13 +189,17 @@ pub fn vote<R: RngCore + CryptoRng>(
             Nullifier::from_bytes(&nfs[secret.nf_position as usize].to_repr()).unwrap()
         );
         assert_eq!(nf_mp.position, secret.nf_position);
+
         let nf_path = nf_mp.to_orchard_merkle_tree();
+
         let vote_power = VotePowerInfo {
             dnf: Nullifier::from_bytes(&as_byte256(&public.nf)).unwrap(),
             nf_start: secret.nf_start,
             nf_path,
         };
+
         let cmx_path = cmx_mp.to_orchard_merkle_tree();
+
         let spend_info = SpendInfo::new(secret.fvk.clone(), secret.spend_note, cmx_path).unwrap();
         let circuit = Circuit::from_action_context_unchecked(
             vote_power,
@@ -205,10 +209,12 @@ pub fn vote<R: RngCore + CryptoRng>(
             secret.rcv.clone(),
         );
 
+        let instances = std::slice::from_ref(&instance);
         tracing::info!("Proving");
         let proof =
-            Proof::<Circuit>::create(pk, &[circuit], std::slice::from_ref(&instance), &mut rng)?;
+            Proof::<Circuit>::create(pk, &[circuit], instances, &mut rng)?;
         tracing::info!("Verifying");
+        proof.verify(vk, instances)?;
         tracing::info!("Proof generated");
         let proof = proof.as_ref().to_vec();
         proofs.push(VoteProof(proof));

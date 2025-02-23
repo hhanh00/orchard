@@ -80,6 +80,12 @@ pub fn validate_ballot(
         let dnf = as_byte256(&action.nf);
         let rk = as_byte256(&action.rk);
         let cmx = as_byte256(&action.cmx);
+        tracing::info!("cmx_root {}", hex::encode(&cmx_root));
+        tracing::info!("nf_root {}", hex::encode(&nf_root));
+        tracing::info!("cv_net {}", hex::encode(&cv_net));
+        tracing::info!("dnf {}", hex::encode(&dnf));
+        tracing::info!("rk {}", hex::encode(&rk));
+        tracing::info!("cmx {}", hex::encode(&cmx));
 
         let instance = Instance::from_parts(
             CtOpt(Anchor::from_bytes(cmx_root)).to_result()?,
