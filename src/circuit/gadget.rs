@@ -225,7 +225,7 @@ pub(crate) fn derive_domain_nullifier<
 ) -> Result<X<pallas::Affine, EccChip>, plonk::Error> {
     // domain_rho = poseidon_hash(domain, rho)
     let domain_rho = {
-        let poseidon_message = [rho, domain];
+        let poseidon_message = [domain, rho];
         let poseidon_hasher =
             PoseidonHash::init(poseidon_chip_1, layouter.namespace(|| "Poseidon init"))?;
         poseidon_hasher.hash(
