@@ -1,3 +1,6 @@
+use std::string::ToString as _;
+
+use crate::note::Rho;
 use crate::vote::util::CtOpt;
 use crate::{
     keys::PreparedIncomingViewingKey,
@@ -114,10 +117,11 @@ pub fn try_decrypt_ballot(
         nf, cmx, epk, enc, ..
     } = action;
 
-    let rho = Nullifier::from_bytes(&as_byte256(&nf)).unwrap();
-    let domain = OrchardDomain::for_nullifier(rho.clone());
+    let rho = Rho::from_bytes(&as_byte256(&nf)).unwrap();
+    let nf = Nullifier::from_bytes(&as_byte256(&nf)).unwrap();
+    let domain = OrchardDomain::for_rho(rho.clone());
     let action = CompactAction::from_parts(
-        rho,
+        nf,
         ExtractedNoteCommitment::from_bytes(&as_byte256(&cmx)).unwrap(),
         EphemeralKeyBytes(as_byte256(&epk)),
         enc.clone().try_into().unwrap(),

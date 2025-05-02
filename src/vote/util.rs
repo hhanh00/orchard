@@ -11,7 +11,7 @@ use super::VoteError;
 pub(crate) fn cmx_hash(level: u8, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let left = MerkleHashOrchard::from_bytes(left).unwrap();
     let right = MerkleHashOrchard::from_bytes(right).unwrap();
-    let h = MerkleHashOrchard::combine(incrementalmerkletree::Altitude::from(level), &left, &right);
+    let h = MerkleHashOrchard::combine(incrementalmerkletree::Level::from(level), &left, &right);
     h.to_bytes()
 }
 

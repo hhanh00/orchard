@@ -1,4 +1,5 @@
 use std::io::Write;
+use alloc::vec::Vec;
 
 use crate::{
     keys::FullViewingKey,

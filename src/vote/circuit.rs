@@ -1,5 +1,7 @@
 //! The Orchard Action circuit implementation.
 
+use alloc::vec::Vec;
+
 use group::{Curve, GroupEncoding};
 use halo2_proofs::{
     circuit::{floor_planner, Layouter, Value},
@@ -20,7 +22,7 @@ use crate::{
     note::{
         commitment::{NoteCommitTrapdoor, NoteCommitment},
         nullifier::Nullifier,
-        ExtractedNoteCommitment, Note,
+        ExtractedNoteCommitment, Note, Rho,
     },
     primitives::redpallas::{SpendAuth, VerificationKey},
     spec::NonIdentityPallasPoint,
@@ -174,7 +176,7 @@ pub struct Circuit {
     g_d_old: Value<NonIdentityPallasPoint>,
     pk_d_old: Value<DiversifiedTransmissionKey>,
     v_old: Value<NoteValue>,
-    rho_old: Value<Nullifier>,
+    rho_old: Value<Rho>,
     psi_old: Value<pallas::Base>,
     rcm_old: Value<NoteCommitTrapdoor>,
     nf_old: Value<Nullifier>,
@@ -507,7 +509,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             let rho_old = assign_free_advice(
                 layouter.namespace(|| "witness rho_old"),
                 config.advices[0],
-                self.rho_old.map(|rho| rho.0),
+                self.rho_old.map(|rho| rho.into_inner()),
             )?;
 
             // Witness cm_old

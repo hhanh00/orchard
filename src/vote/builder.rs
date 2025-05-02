@@ -1,3 +1,5 @@
+use std::string::ToString as _;
+
 use super::{
     ballot::{
         Ballot, BallotAction, BallotActionSecret, BallotAnchors, BallotData, BallotWitnesses,
@@ -8,7 +10,7 @@ use super::{
     proof::{Proof, ProvingKey, VerifyingKey},
 };
 use crate::{
-    builder::SpendInfo, keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed}, note_encryption::OrchardNoteEncryption, primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey}, value::{NoteValue, ValueCommitTrapdoor, ValueCommitment}, Anchor, Note
+    builder::SpendInfo, keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho}, note_encryption::OrchardNoteEncryption, primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey}, value::{NoteValue, ValueCommitTrapdoor, ValueCommitment}, Anchor, Note
 };
 use crate::{vote::util::as_byte256, Address};
 use pasta_curves::{
@@ -17,6 +19,7 @@ use pasta_curves::{
 };
 use rand::{CryptoRng, RngCore};
 use zcash_note_encryption::COMPACT_NOTE_SIZE;
+use alloc::vec::Vec;
 
 use super::VoteError;
 
@@ -67,7 +70,7 @@ pub fn vote<R: RngCore + CryptoRng>(
             (Some(sk), fvk, (note, 0))
         };
 
-        let rho = spend.nullifier_domain(&fvk, domain);
+        let rho = Rho::from_nf_old(spend.nullifier_domain(&fvk, domain));
         let rseed = RandomSeed::random(&mut rng, &rho);
         let output = match i {
             0 => {
@@ -135,8 +138,7 @@ pub fn vote<R: RngCore + CryptoRng>(
         let cmx = output.commitment();
         let cmx = ExtractedNoteCommitment::from(cmx);
 
-        let address = output.recipient();
-        let encryptor = OrchardNoteEncryption::new(None, output.clone(), address, [0u8; 512]);
+        let encryptor = OrchardNoteEncryption::new(None, output.clone(), [0u8; 512]);
         let epk = encryptor.epk().to_bytes().0;
         let enc = encryptor.encrypt_note_plaintext();
         let mut compact_enc = [0u8; COMPACT_NOTE_SIZE];

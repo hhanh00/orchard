@@ -1,6 +1,7 @@
 use ff::PrimeField as _;
 use pasta_curves::Fp;
 use serde::{Deserialize, Serialize};
+use alloc::vec::Vec;
 
 use crate::{
     note::ExtractedNoteCommitment,

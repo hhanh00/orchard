@@ -1,5 +1,6 @@
 //!
 use std::marker::PhantomData;
+use alloc::vec::Vec;
 
 use halo2_proofs::{
     plonk::{self, SingleVerifier},

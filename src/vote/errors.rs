@@ -1,5 +1,6 @@
 use halo2_proofs::plonk::Error as PlonkError;
 use thiserror::Error;
+use alloc::string::String;
 
 ///
 #[derive(Error, Debug)]

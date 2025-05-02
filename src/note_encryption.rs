@@ -112,6 +112,11 @@ impl OrchardDomain {
     pub fn for_compact_action(act: &CompactAction) -> Self {
         Self { rho: act.rho() }
     }
+
+    /// Constructs a domain that can be used to trial-decrypt this rho.
+    pub fn for_rho(rho: Rho) -> Self {
+        Self { rho }
+    }
 }
 
 impl Domain for OrchardDomain {

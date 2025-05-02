@@ -50,7 +50,7 @@ impl Rho {
     /// of the note being spent in the [`Action`] under construction.
     ///
     /// [`Action`]: crate::action::Action
-    pub(crate) fn from_nf_old(nf: Nullifier) -> Self {
+    pub fn from_nf_old(nf: Nullifier) -> Self {
         Rho(nf.0)
     }
 

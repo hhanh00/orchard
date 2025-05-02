@@ -1,6 +1,7 @@
 use ff::PrimeField as _;
 use incrementalmerkletree::Hashable as _;
 use pasta_curves::Fp;
+use alloc::vec::Vec;
 
 use crate::{note::ExtractedNoteCommitment, tree::MerkleHashOrchard};
 
@@ -100,6 +101,6 @@ impl MerklePath {
 pub fn cmx_hash(level: u8, left: Fp, right: Fp) -> Fp {
     let left = MerkleHashOrchard::from_base(left);
     let right = MerkleHashOrchard::from_base(right);
-    let h = MerkleHashOrchard::combine(incrementalmerkletree::Altitude::from(level), &left, &right);
+    let h = MerkleHashOrchard::combine(incrementalmerkletree::Level::from(level), &left, &right);
     h.inner()
 }
