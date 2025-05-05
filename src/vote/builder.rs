@@ -18,6 +18,7 @@ use pasta_curves::{
     Fp, Fq,
 };
 use rand::{CryptoRng, RngCore};
+use tracing::{info, span, Level};
 use zcash_note_encryption::COMPACT_NOTE_SIZE;
 use alloc::vec::Vec;
 
@@ -38,10 +39,10 @@ pub fn vote<R: RngCore + CryptoRng>(
     pk: &ProvingKey<Circuit>,
     vk: &VerifyingKey<Circuit>,
 ) -> Result<Ballot, VoteError> {
-    // let nfs = list_nf_ranges(connection)?;
-    // let cmxs = list_cmxs(connection)?;
-    // let address = VoteAddress::decode(address)?.0;
-    // let notes = list_notes(connection, 0, fvk)?;
+    let span = span!(Level::INFO, "vote");
+    span.in_scope(|| {
+        info!("Building ballot");
+    });
 
     let mut total_value = 0;
     let mut inputs = vec![];
@@ -156,6 +157,9 @@ pub fn vote<R: RngCore + CryptoRng>(
 
         ballot_actions.push(ballot_action);
     }
+    span.in_scope(|| {
+        info!("- Computing Merkle paths");
+    });
 
     let nf_positions = ballot_secrets
         .iter()
@@ -170,8 +174,9 @@ pub fn vote<R: RngCore + CryptoRng>(
     let (cmx_root, cmx_mps) = calculate_merkle_paths(0, &cmx_positions, &cmxs);
 
     let mut proofs = vec![];
-    for (((secret, public), cmx_mp), nf_mp) in ballot_secrets
+    for ((((i, secret), public), cmx_mp), nf_mp) in ballot_secrets
         .iter()
+        .enumerate()
         .zip(ballot_actions.iter())
         .zip(cmx_mps.iter())
         .zip(nf_mps.iter())
@@ -212,12 +217,12 @@ pub fn vote<R: RngCore + CryptoRng>(
         );
 
         let instances = std::slice::from_ref(&instance);
-        tracing::info!("Proving");
+        span.in_scope(|| {
+            info!("- Computing Proof {}/{}", i + 1, ballot_secrets.len());
+        });
         let proof =
             Proof::<Circuit>::create(pk, &[circuit], instances, &mut rng)?;
-        tracing::info!("Verifying");
         proof.verify(vk, instances)?;
-        tracing::info!("Proof generated");
         let proof = proof.as_ref().to_vec();
         proofs.push(VoteProof(proof));
     }
@@ -273,5 +278,8 @@ pub fn vote<R: RngCore + CryptoRng>(
         witnesses,
     };
 
+    span.in_scope(|| {
+        info!("Ballot built");
+    });
     Ok(ballot)
 }
