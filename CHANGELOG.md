@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [0.10.2] - 2025-05-08
+
+### Fixed
+- Fixes problems in test compilation under `--no-default-features`
+
 ## [0.10.1] - 2024-12-16
 
 ### Added
