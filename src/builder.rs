@@ -1134,7 +1134,7 @@ impl OutputView for OutputInfo {
 }
 
 /// Generators for property testing.
-#[cfg(any(test, feature = "test-dependencies"))]
+#[cfg(all(feature = "circuit", any(test, feature = "test-dependencies")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "test-dependencies")))]
 pub mod testing {
     use alloc::vec::Vec;
@@ -1274,7 +1274,7 @@ pub mod testing {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "circuit"))]
 mod tests {
     use rand::rngs::OsRng;
 

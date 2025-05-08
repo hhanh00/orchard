@@ -1,3 +1,5 @@
+#![cfg(feature = "circuit")]
+
 use bridgetree::BridgeTree;
 use incrementalmerkletree::Hashable;
 use orchard::{

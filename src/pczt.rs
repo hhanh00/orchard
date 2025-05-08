@@ -301,7 +301,7 @@ pub struct Zip32Derivation {
     derivation_path: Vec<ChildIndex>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "circuit"))]
 mod tests {
     use bridgetree::BridgeTree;
     use ff::{Field, PrimeField};
