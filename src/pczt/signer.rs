@@ -1,6 +1,7 @@
 use rand::{CryptoRng, RngCore};
+use reddsa::orchard::SpendAuth;
 
-use crate::{keys::SpendAuthorizingKey, primitives::redpallas};
+use crate::{keys::SpendAuthorizingKey, primitives::redpallas::{self, Signature}};
 
 impl super::Action {
     /// Signs the Orchard spend with the given spend authorizing key.
@@ -28,6 +29,15 @@ impl super::Action {
         } else {
             Err(SignerError::WrongSpendAuthorizingKey)
         }
+    }
+
+    /// Set the spend authorizing key to the given value.
+    ///
+    /// It is the caller's responsibility to ensure that the signature is
+    /// valid and corresponds to the spend authorizing key used to create the Orchard
+    /// spend.
+    pub fn spend_auth_sig(&mut self, signature: Signature<SpendAuth>) {
+        self.spend.spend_auth_sig = Some(signature);
     }
 }
 
