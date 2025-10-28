@@ -10,11 +10,11 @@ use crate::{
 use super::{path::cmx_hash, util::empty_hash};
 
 ///
-#[derive(Clone, Copy, Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, Copy, Serialize, Deserialize, Default, PartialEq, Debug)]
 pub struct OrchardHash(#[serde(with = "hex")] pub [u8; 32]);
 
 ///
-#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
 pub struct Frontier {
     ///
     pub position: u32,
