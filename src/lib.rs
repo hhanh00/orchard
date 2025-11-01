@@ -40,6 +40,8 @@ pub mod primitives;
 mod spec;
 pub mod tree;
 pub mod value;
+#[cfg(feature = "vote")]
+pub mod vote;
 pub mod zip32;
 
 #[cfg(test)]

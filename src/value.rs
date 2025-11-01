@@ -359,6 +359,16 @@ impl ValueCommitment {
         ValueCommitment(V * value + R * rcv.0)
     }
 
+    /// Derives a `ValueCommitment` by $\mathsf{ValueCommit^{Orchard}}$.
+    /// with rcv = 0
+    ///
+    /// Defined in [Zcash Protocol Spec § 5.4.8.3: Homomorphic Pedersen commitments (Sapling and Orchard)][concretehomomorphiccommit].
+    ///
+    /// [concretehomomorphiccommit]: https://zips.z.cash/protocol/nu5.pdf#concretehomomorphiccommit
+    pub fn derive_from_value(value: i64) -> Self {
+        ValueCommitment::derive(ValueSum::from_raw(value), ValueCommitTrapdoor::zero())
+    }
+
     pub(crate) fn into_bvk(self) -> redpallas::VerificationKey<Binding> {
         // TODO: impl From<pallas::Point> for redpallas::VerificationKey.
         self.0.to_bytes().try_into().unwrap()

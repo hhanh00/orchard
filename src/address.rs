@@ -35,11 +35,13 @@ impl Address {
         self.d
     }
 
-    pub(crate) fn g_d(&self) -> NonIdentityPallasPoint {
+    /// Returns the base point (generator) for the given `diversifier`
+    pub fn g_d(&self) -> NonIdentityPallasPoint {
         diversify_hash(self.d.as_array())
     }
 
-    pub(crate) fn pk_d(&self) -> &DiversifiedTransmissionKey {
+    /// Returns the public key (point) for this `Address`
+    pub fn pk_d(&self) -> &DiversifiedTransmissionKey {
         &self.pk_d
     }
 
