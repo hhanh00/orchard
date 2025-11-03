@@ -8,7 +8,7 @@ use super::{
     proof::{Proof, ProvingKey, VerifyingKey},
 };
 use crate::{
-    builder::SpendInfo, keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed}, note_encryption::OrchardNoteEncryption, primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey}, value::{NoteValue, ValueCommitTrapdoor, ValueCommitment}, Anchor, Note
+    Anchor, Note, builder::SpendInfo, keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed}, note_encryption::OrchardNoteEncryption, primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey}, value::{NoteValue, ValueCommitTrapdoor, ValueCommitment}
 };
 use crate::{vote::util::as_byte256, Address};
 use pasta_curves::{
@@ -21,7 +21,7 @@ use zcash_note_encryption::COMPACT_NOTE_SIZE;
 use super::VoteError;
 
 ///
-pub fn vote<R: RngCore + CryptoRng>(
+pub fn vote<F: Fn(String), R: RngCore + CryptoRng>(
     domain: Fp,
     signature_required: bool,
     sk: Option<SpendingKey>,
@@ -32,6 +32,7 @@ pub fn vote<R: RngCore + CryptoRng>(
     nfs: &[Fp],
     cmxs: &[Fp],
     mut rng: R,
+    progress: F,
     pk: &ProvingKey<Circuit>,
     vk: &VerifyingKey<Circuit>,
 ) -> Result<Ballot, VoteError> {
@@ -39,6 +40,7 @@ pub fn vote<R: RngCore + CryptoRng>(
     // let cmxs = list_cmxs(connection)?;
     // let address = VoteAddress::decode(address)?.0;
     // let notes = list_notes(connection, 0, fvk)?;
+    progress("Starting Ballot Creation".to_string());
 
     let mut total_value = 0;
     let mut inputs = vec![];
@@ -159,17 +161,18 @@ pub fn vote<R: RngCore + CryptoRng>(
         .iter()
         .map(|s| s.nf_position)
         .collect::<Vec<_>>();
+    progress("Calculating NF merkle tree".to_string());
     let (nf_root, nf_mps) = calculate_merkle_paths(0, &nf_positions, &nfs);
 
     let cmx_positions = ballot_secrets
         .iter()
         .map(|s| s.cmx_position)
         .collect::<Vec<_>>();
+    progress("Calculating CMX merkle tree".to_string());
     let (cmx_root, cmx_mps) = calculate_merkle_paths(0, &cmx_positions, &cmxs);
 
     let mut proofs = vec![];
-    for (((secret, public), cmx_mp), nf_mp) in ballot_secrets
-        .iter()
+    for ((((i, secret), public), cmx_mp), nf_mp) in ballot_secrets.iter().enumerate()
         .zip(ballot_actions.iter())
         .zip(cmx_mps.iter())
         .zip(nf_mps.iter())
@@ -211,9 +214,11 @@ pub fn vote<R: RngCore + CryptoRng>(
 
         let instances = std::slice::from_ref(&instance);
         tracing::info!("Proving");
+        progress(format!("Building proof {}/{}", i+1, ballot_secrets.len()));
         let proof =
             Proof::<Circuit>::create(pk, &[circuit], instances, &mut rng)?;
         tracing::info!("Verifying");
+        progress(format!("Verifying proof {}/{}", i+1, ballot_secrets.len()));
         proof.verify(vk, instances)?;
         tracing::info!("Proof generated");
         let proof = proof.as_ref().to_vec();
@@ -225,6 +230,7 @@ pub fn vote<R: RngCore + CryptoRng>(
         cmx: cmx_root.to_repr().to_vec(),
     };
 
+    progress("Signing".to_string());
     let ballot_data = BallotData {
         version: 1,
         domain: domain.to_repr().to_vec(),
@@ -270,6 +276,7 @@ pub fn vote<R: RngCore + CryptoRng>(
         data: ballot_data,
         witnesses,
     };
+    progress("Ballot built".to_string());
 
     Ok(ballot)
 }
