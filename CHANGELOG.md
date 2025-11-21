@@ -7,6 +7,13 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Added
+- `orchard::pczt::Action::apply_signature`
+
+### Changed
+- `orchard::pczt::SignerError` has added variants:
+  - `InvalidExternalSignature`
+
 ## [0.11.0] - 2025-02-20
 
 ### Added
