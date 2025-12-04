@@ -117,6 +117,7 @@ impl BundleType {
 
 /// An error type for the kinds of errors that can occur during bundle construction.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum BuildError {
     /// Spends are disabled for the provided bundle type.
     SpendsDisabled,
@@ -181,6 +182,7 @@ impl From<value::OverflowError> for BuildError {
 
 /// An error type for adding a spend to the builder.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpendError {
     /// Spends aren't enabled for this builder.
     SpendsDisabled,

@@ -54,6 +54,7 @@ impl super::Action {
 
 /// Errors that can occur while signing an Orchard action in a PCZT.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SignerError {
     /// A provided external signature was not valid for the action's spend.
     InvalidExternalSignature,

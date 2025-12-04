@@ -104,6 +104,7 @@ impl super::Bundle {
 
 /// Errors that can occur while extracting a regular Orchard bundle from a PCZT bundle.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum TxExtractorError {
     /// The Transaction Extractor role requires `bsk` to be set.
     MissingBindingSignatureSigningKey,

@@ -108,6 +108,7 @@ impl super::Bundle {
 
 /// Errors that can occur while creating Orchard proofs for a PCZT.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ProverError {
     /// The output note's components do not produce a valid note commitment.
     InvalidOutputNote,

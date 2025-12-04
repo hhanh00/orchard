@@ -71,6 +71,7 @@ impl ActionUpdater<'_> {
 
 /// Errors that can occur while updating an Orchard bundle in a PCZT.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum UpdaterError {
     /// An out-of-bounds index was provided when looking up an action.
     InvalidIndex,

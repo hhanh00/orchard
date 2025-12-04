@@ -13,6 +13,20 @@ and this project adheres to Rust's notion of
 ### Changed
 - `orchard::pczt::SignerError` has added variants:
   - `InvalidExternalSignature`
+- All error enums in this crate are now `#[non_exhaustive]`, to allow future
+  error variants to be added without a SemVer break:
+  - `orchard::builder`:
+    - `BuildError`
+    - `SpendError`
+  - `orchard::pczt`:
+    - `IoFinalizerError`
+    - `ParseError`
+    - `ProverError`
+    - `SignerError`
+    - `TxExtractorError`
+    - `UpdaterError`
+    - `VerifyError`
+  - `orchard::zip32::Error`
 
 ## [0.11.0] - 2025-02-20
 
