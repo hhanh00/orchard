@@ -1273,7 +1273,7 @@ pub mod testing {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "circuit"))]
 mod tests {
     use rand::rngs::OsRng;
 

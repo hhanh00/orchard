@@ -28,6 +28,11 @@ and this project adheres to Rust's notion of
     - `VerifyError`
   - `orchard::zip32::Error`
 
+## [0.10.2] - 2025-05-08
+
+### Fixed
+- Fixes problems in test compilation under `--no-default-features`
+
 ## [0.11.0] - 2025-02-20
 
 ### Added
