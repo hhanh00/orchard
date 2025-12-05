@@ -20,7 +20,7 @@ use crate::{
     note_encryption::OrchardNoteEncryption,
     primitives::redpallas::{self, Binding, SpendAuth},
     tree::{Anchor, MerklePath},
-    value::{self, NoteValue, OverflowError, ValueCommitTrapdoor, ValueCommitment, ValueSum},
+    value::{self, BalanceError, NoteValue, ValueCommitTrapdoor, ValueCommitment, ValueSum},
     Proof,
 };
 
@@ -132,7 +132,7 @@ pub enum BuildError {
     Proof(halo2_proofs::plonk::Error),
     /// An overflow error occurred while attempting to construct the value
     /// for a bundle.
-    ValueSum(value::OverflowError),
+    ValueSum(value::BalanceError),
     /// External signature is not valid.
     InvalidExternalSignature,
     /// A signature is valid for more than one input. This should never happen if `alpha`
@@ -174,8 +174,8 @@ impl From<halo2_proofs::plonk::Error> for BuildError {
     }
 }
 
-impl From<value::OverflowError> for BuildError {
-    fn from(e: value::OverflowError) -> Self {
+impl From<value::BalanceError> for BuildError {
+    fn from(e: value::BalanceError) -> Self {
         BuildError::ValueSum(e)
     }
 }
@@ -206,13 +206,20 @@ impl fmt::Display for SpendError {
 #[cfg(feature = "std")]
 impl std::error::Error for SpendError {}
 
-/// The only error that can occur here is if outputs are disabled for this builder.
+/// An error type for adding an output to the builder.
 #[derive(Debug, PartialEq, Eq)]
-pub struct OutputError;
+#[non_exhaustive]
+pub enum OutputError {
+    /// Outputs aren't enabled for this builder.
+    OutputsDisabled,
+}
 
 impl fmt::Display for OutputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Outputs are not enabled for this builder")
+        use OutputError::*;
+        f.write_str(match self {
+            OutputsDisabled => "Outputs are not enabled for this builder",
+        })
     }
 }
 
@@ -596,7 +603,7 @@ impl Builder {
     ) -> Result<(), OutputError> {
         let flags = self.bundle_type.flags();
         if !flags.outputs_enabled() {
-            return Err(OutputError);
+            return Err(OutputError::OutputsDisabled);
         }
 
         self.outputs
@@ -627,7 +634,7 @@ impl Builder {
     ///
     /// [added]: https://zips.z.cash/protocol/protocol.pdf#orchardbalance
     /// [must not have a negative value]: https://zips.z.cash/protocol/protocol.pdf#transactions
-    pub fn value_balance<V: TryFrom<i64>>(&self) -> Result<V, value::OverflowError> {
+    pub fn value_balance<V: TryFrom<i64>>(&self) -> Result<V, value::BalanceError> {
         let value_balance = self
             .spends
             .iter()
@@ -638,8 +645,9 @@ impl Builder {
                     .map(|output| NoteValue::zero() - output.value),
             )
             .try_fold(ValueSum::zero(), |acc, note_value| acc + note_value)
-            .ok_or(OverflowError)?;
-        i64::try_from(value_balance).and_then(|i| V::try_from(i).map_err(|_| value::OverflowError))
+            .ok_or(BalanceError::Overflow)?;
+        i64::try_from(value_balance)
+            .and_then(|i| V::try_from(i).map_err(|_| value::BalanceError::Overflow))
     }
 
     /// Builds a bundle containing the given spent notes and outputs.
@@ -717,7 +725,7 @@ pub fn bundle<V: TryFrom<i64>>(
             let result_value_balance: V = i64::try_from(value_balance)
                 .map_err(BuildError::ValueSum)
                 .and_then(|i| {
-                    V::try_from(i).map_err(|_| BuildError::ValueSum(value::OverflowError))
+                    V::try_from(i).map_err(|_| BuildError::ValueSum(value::BalanceError::Overflow))
                 })?;
 
             // Compute the transaction binding signing key.
@@ -835,7 +843,7 @@ fn build_bundle<B, R: RngCore>(
     let value_balance = pre_actions
         .iter()
         .try_fold(ValueSum::zero(), |acc, action| acc + action.value_sum())
-        .ok_or(OverflowError)?;
+        .ok_or(BalanceError::Overflow)?;
 
     finisher(pre_actions, flags, value_balance, bundle_meta, rng)
 }

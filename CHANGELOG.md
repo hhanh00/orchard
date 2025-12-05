@@ -9,8 +9,11 @@ and this project adheres to Rust's notion of
 
 ### Added
 - `orchard::pczt::Action::apply_signature`
+- `orchard::value::BalanceError`
 
 ### Changed
+- `orchard::builder::BuildError::ValueSum` variant now contains
+  `orchard::value::BalanceError`.
 - `orchard::pczt::SignerError` has added variants:
   - `InvalidExternalSignature`
 - All error enums in this crate are now `#[non_exhaustive]`, to allow future
@@ -27,6 +30,11 @@ and this project adheres to Rust's notion of
     - `UpdaterError`
     - `VerifyError`
   - `orchard::zip32::Error`
+- `orchard::builder::OutputError` has been changed from a zero-sized struct to
+  a `#[non_exhaustive]` enum with (for now) a single variant.
+
+### Removed
+- `orchard::value::OverflowError` (use `BalanceError` instead).
 
 ## [0.10.2] - 2025-05-08
 
