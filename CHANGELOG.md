@@ -10,6 +10,16 @@ and this project adheres to Rust's notion of
 ### Added
 - `orchard::pczt::Action::apply_signature`
 - `orchard::value::BalanceError`
+- `impl std::error::Error` for the following errors:
+  - `orchard::pczt`:
+    - `IoFinalizerError`
+    - `ParseError`
+    - `ProverError`
+    - `SignerError`
+    - `TxExtractorError`
+    - `UpdaterError`
+    - `VerifyError`
+  - `orchard::zip32::Error`
 
 ### Changed
 - `orchard::builder::BuildError::ValueSum` variant now contains

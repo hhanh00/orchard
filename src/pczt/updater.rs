@@ -1,3 +1,5 @@
+use core::fmt;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -76,3 +78,14 @@ pub enum UpdaterError {
     /// An out-of-bounds index was provided when looking up an action.
     InvalidIndex,
 }
+
+impl fmt::Display for UpdaterError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UpdaterError::InvalidIndex => write!(f, "Action index is out-of-bounds"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for UpdaterError {}

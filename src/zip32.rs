@@ -36,7 +36,8 @@ impl fmt::Display for Error {
     }
 }
 
-//impl std::error::Error for Error {}
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
 
 /// An Orchard full viewing key fingerprint
 struct FvkFingerprint([u8; 32]);
