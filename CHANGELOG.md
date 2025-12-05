@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [0.12.0] - 2025-12-05
+
 ### Added
 - `orchard::pczt::Action::apply_signature`
 - `orchard::value::BalanceError`

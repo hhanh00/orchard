@@ -1,8 +1,8 @@
 [package]
 name = "orchard"
-version = "0.11.0"
+version = "0.12.0"
 authors = [
-    "Sean Bowe <sean@electriccoin.co>",
+    "Sean Bowe",
     "Jack Grigg <jack@electriccoin.co>",
     "Daira-Emma Hopwood <daira@jacaranda.org>",
     "Ying Tong Lai",
