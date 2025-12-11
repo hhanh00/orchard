@@ -2,8 +2,9 @@ use blake2b_simd::Params;
 use ff::FromUniformBytes as _;
 use incrementalmerkletree::Hashable as _;
 use pasta_curves::Fp;
+use zip32::ChildIndex;
 
-use crate::tree::MerkleHashOrchard;
+use crate::{keys::SpendingKey, tree::MerkleHashOrchard, zip32::ExtendedSpendingKey};
 
 use super::VoteError;
 
@@ -29,6 +30,18 @@ pub fn calculate_domain(info: &[u8]) -> Fp {
         .update(info)
         .finalize();
     Fp::from_uniform_bytes(hash.as_bytes().try_into().unwrap())
+}
+
+/// Derive the secret key corresponding to a given question & answer
+/// by index
+pub fn derive_question_sk(seed: &[u8], coin_type: u32, question: usize, answer: usize) -> Result<SpendingKey, crate::zip32::Error> {
+    let path = &[
+        ChildIndex::hardened(32),
+        ChildIndex::hardened(coin_type),
+        ChildIndex::hardened(question as u32),
+        ChildIndex::hardened(answer as u32),
+    ];
+    ExtendedSpendingKey::from_path(seed, path).map(|esk| esk.sk())
 }
 
 #[derive(Debug)]
