@@ -11,7 +11,7 @@ mod proof;
 mod util;
 mod validate;
 
-pub use ballot::{Ballot, BallotData};
+pub use ballot::{Ballot, BallotData, BallotAnchors};
 pub use circuit::Circuit;
 pub use errors::VoteError;
 pub use frontier::{Frontier, OrchardHash};
@@ -19,7 +19,7 @@ pub use path::calculate_merkle_paths;
 pub use proof::{ProvingKey, VerifyingKey};
 pub use util::{calculate_domain, derive_question_sk};
 pub use validate::{try_decrypt_ballot, validate_ballot};
-pub use builder::vote;
+pub use builder::{encrypt_ballot_action, vote};
 
 type Hash = [u8; 32];
 const DEPTH: usize = 32;

@@ -1,4 +1,3 @@
-use alloc::{vec::Vec, string::{String, ToString}};
 use super::{
     ballot::{
         Ballot, BallotAction, BallotActionSecret, BallotAnchors, BallotData, BallotWitnesses,
@@ -9,9 +8,19 @@ use super::{
     proof::{Proof, ProvingKey, VerifyingKey},
 };
 use crate::{
-    Anchor, Note, builder::SpendInfo, keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho}, note_encryption::OrchardNoteEncryption, primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey}, value::{NoteValue, ValueCommitTrapdoor, ValueCommitment}
+    builder::SpendInfo,
+    keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey},
+    note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
+    note_encryption::OrchardNoteEncryption,
+    primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey},
+    value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
+    Anchor, Note,
 };
 use crate::{vote::util::as_byte256, Address};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use pasta_curves::{
     group::ff::{Field as _, PrimeField},
     Fp, Fq,
@@ -20,6 +29,47 @@ use rand::{CryptoRng, RngCore};
 use zcash_note_encryption::COMPACT_NOTE_SIZE;
 
 use super::VoteError;
+
+///
+pub fn encrypt_ballot_action<R: CryptoRng + RngCore>(
+    domain: Fp,
+    fvk: FullViewingKey,
+    spend: &Note,
+    recipient: Address,
+    amount: u64,
+    mut rng: R,
+) -> Result<(BallotAction, Fq, ValueCommitTrapdoor), VoteError> {
+    let rho = spend.nullifier_domain(&fvk, domain);
+    let rho = Rho::from_nf_old(rho);
+    let rseed = RandomSeed::random(&mut rng, &rho);
+    let output = Note::from_parts(recipient, NoteValue::from_raw(amount), rho, rseed)
+        .into_option()
+        .ok_or(VoteError::InvalidBallot("Invalid Amount".into()))?;
+    let cv_net = spend.value() - output.value();
+    let rcv = ValueCommitTrapdoor::random(&mut rng);
+    let cv_net = ValueCommitment::derive(cv_net, rcv.clone());
+    let alpha = Fq::random(&mut rng);
+    let svk = SpendValidatingKey::from(fvk);
+    let rk = svk.randomize(&alpha);
+    let cmx = output.commitment();
+    let cmx = ExtractedNoteCommitment::from(cmx);
+    let encryptor = OrchardNoteEncryption::new(None, output.clone(), [0u8; 512]);
+    let epk = encryptor.epk().to_bytes().0;
+    let enc = encryptor.encrypt_note_plaintext();
+    let mut compact_enc = [0u8; COMPACT_NOTE_SIZE];
+    compact_enc.copy_from_slice(&enc[0..COMPACT_NOTE_SIZE]);
+    let rk: [u8; 32] = rk.into();
+
+    let action = BallotAction {
+        cv_net: cv_net.to_bytes().to_vec(),
+        rk: rk.to_vec(),
+        nf: rho.to_bytes().to_vec(),
+        cmx: cmx.to_bytes().to_vec(),
+        epk: epk.to_vec(),
+        enc: compact_enc.to_vec(),
+    };
+    Ok((action, alpha, rcv))
+}
 
 ///
 pub fn vote<F: Fn(String), R: RngCore + CryptoRng>(
@@ -173,7 +223,9 @@ pub fn vote<F: Fn(String), R: RngCore + CryptoRng>(
     let (cmx_root, cmx_mps) = calculate_merkle_paths(0, &cmx_positions, &cmxs);
 
     let mut proofs = vec![];
-    for ((((i, secret), public), cmx_mp), nf_mp) in ballot_secrets.iter().enumerate()
+    for ((((i, secret), public), cmx_mp), nf_mp) in ballot_secrets
+        .iter()
+        .enumerate()
         .zip(ballot_actions.iter())
         .zip(cmx_mps.iter())
         .zip(nf_mps.iter())
@@ -215,11 +267,14 @@ pub fn vote<F: Fn(String), R: RngCore + CryptoRng>(
 
         let instances = std::slice::from_ref(&instance);
         tracing::info!("Proving");
-        progress(format!("Building proof {}/{}", i+1, ballot_secrets.len()));
-        let proof =
-            Proof::<Circuit>::create(pk, &[circuit], instances, &mut rng)?;
+        progress(format!("Building proof {}/{}", i + 1, ballot_secrets.len()));
+        let proof = Proof::<Circuit>::create(pk, &[circuit], instances, &mut rng)?;
         tracing::info!("Verifying");
-        progress(format!("Verifying proof {}/{}", i+1, ballot_secrets.len()));
+        progress(format!(
+            "Verifying proof {}/{}",
+            i + 1,
+            ballot_secrets.len()
+        ));
         proof.verify(vk, instances)?;
         tracing::info!("Proof generated");
         let proof = proof.as_ref().to_vec();

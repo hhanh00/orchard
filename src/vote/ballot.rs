@@ -12,11 +12,14 @@ use blake2b_simd::Params;
 use pasta_curves::Fq;
 use serde::{Deserialize, Serialize};
 
+///
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct BallotAnchors {
+    /// root of nullifier tree
     #[serde(with = "hex")]
     pub nf: Vec<u8>,
     #[serde(with = "hex")]
+    /// root of note commitment tree
     pub cmx: Vec<u8>,
 }
 
