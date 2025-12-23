@@ -11,7 +11,7 @@ mod proof;
 mod util;
 mod validate;
 
-pub use ballot::{Ballot, BallotData, BallotAnchors};
+pub use ballot::{Ballot, BallotData, BallotAnchors, BallotWitnesses};
 pub use circuit::Circuit;
 pub use errors::VoteError;
 pub use frontier::{Frontier, OrchardHash};

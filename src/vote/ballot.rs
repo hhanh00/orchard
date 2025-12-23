@@ -112,9 +112,13 @@ pub struct VoteProof(#[serde(with = "hex")] pub Vec<u8>);
 pub struct VoteSignature(#[serde(with = "hex")] pub Vec<u8>);
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+/// Witness
 pub struct BallotWitnesses {
+    /// ZK Proofs
     pub proofs: Vec<VoteProof>,
+    /// Spending authorization signatures
     pub sp_signatures: Option<Vec<VoteSignature>>,
+    /// Binding signature (for the total value)
     #[serde(with = "hex")]
     pub binding_signature: Vec<u8>,
 }
