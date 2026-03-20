@@ -1052,3 +1052,225 @@ impl super::proof::Statement for Circuit {
     type Circuit = Circuit;
     type Instance = Instance;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vote::util::poseidon_hash;
+    use ff::PrimeField;
+    use halo2_proofs::dev::MockProver;
+    use pasta_curves::group::ff::Field;
+    use rand::rngs::OsRng;
+
+    /// K for the vote circuit (must match proof.rs K=15 for sufficient rows)
+    const MOCK_K: u32 = 15;
+
+    /// Minimal NF tree builder for testing. Builds a depth-29 Poseidon Merkle tree
+    /// from gap ranges, using empty subtree hashes for padding.
+    fn build_test_nf_tree(sorted_nfs: &[Fp]) -> (Fp, Vec<[Fp; 2]>, Vec<Vec<Fp>>) {
+        // Build gap ranges [low, width]
+        let mut ranges: Vec<[Fp; 2]> = vec![];
+        let mut prev = Fp::zero();
+        for &nf in sorted_nfs {
+            if prev < nf {
+                let high = nf - Fp::one();
+                ranges.push([prev, high - prev]);
+            }
+            prev = nf + Fp::one();
+        }
+        if prev != Fp::zero() {
+            let high = Fp::one().neg();
+            ranges.push([prev, high - prev]);
+        }
+
+        // Compute leaf hashes
+        let leaves: Vec<Fp> = ranges.iter().map(|[l, w]| poseidon_hash(*l, *w)).collect();
+
+        // Precompute empty subtree hashes
+        let mut empty = [Fp::zero(); NF_MERKLE_DEPTH];
+        empty[0] = poseidon_hash(Fp::zero(), Fp::zero());
+        for i in 1..NF_MERKLE_DEPTH {
+            empty[i] = poseidon_hash(empty[i - 1], empty[i - 1]);
+        }
+
+        // Build levels bottom-up (only allocating actual nodes + padding)
+        let mut level0 = leaves;
+        if level0.is_empty() {
+            level0.push(empty[0]);
+        }
+        if level0.len() & 1 == 1 {
+            level0.push(empty[0]);
+        }
+        let mut levels: Vec<Vec<Fp>> = vec![level0];
+
+        for i in 0..NF_MERKLE_DEPTH - 1 {
+            let prev_level = &levels[i];
+            let pairs = prev_level.len() / 2;
+            let mut next: Vec<Fp> = (0..pairs)
+                .map(|j| poseidon_hash(prev_level[j * 2], prev_level[j * 2 + 1]))
+                .collect();
+            if next.len() & 1 == 1 {
+                next.push(empty[i + 1]);
+            }
+            levels.push(next);
+        }
+
+        let top = &levels[NF_MERKLE_DEPTH - 1];
+        let root = poseidon_hash(top[0], top[1]);
+
+        (root, ranges, levels)
+    }
+
+    /// Extract auth path for a leaf at `idx` from pre-computed levels.
+    fn extract_auth_path(
+        idx: usize,
+        levels: &[Vec<Fp>],
+    ) -> [Fp; NF_MERKLE_DEPTH] {
+        let mut empty = [Fp::zero(); NF_MERKLE_DEPTH];
+        empty[0] = poseidon_hash(Fp::zero(), Fp::zero());
+        for i in 1..NF_MERKLE_DEPTH {
+            empty[i] = poseidon_hash(empty[i - 1], empty[i - 1]);
+        }
+
+        let mut path = [Fp::zero(); NF_MERKLE_DEPTH];
+        let mut pos = idx;
+        for level in 0..NF_MERKLE_DEPTH {
+            let sibling = pos ^ 1;
+            path[level] = if sibling < levels[level].len() {
+                levels[level][sibling]
+            } else {
+                empty[level]
+            };
+            pos >>= 1;
+        }
+        path
+    }
+
+    /// Find which range contains `value` (binary search).
+    fn find_range(ranges: &[[Fp; 2]], value: Fp) -> Option<usize> {
+        let i = ranges.partition_point(|[low, _]| *low <= value);
+        if i == 0 {
+            return None;
+        }
+        let idx = i - 1;
+        let [low, width] = ranges[idx];
+        let offset = value - low;
+        if offset <= width { Some(idx) } else { None }
+    }
+
+    /// End-to-end vote circuit test with MockProver.
+    ///
+    /// This test exercises the ENTIRE vote proof pipeline:
+    /// 1. Create a real spending key, note, and CMX Merkle tree
+    /// 2. Build a Poseidon NF tree with sentinels
+    /// 3. Compute nullifier non-membership proof
+    /// 4. Construct the full vote Circuit with all witnesses
+    /// 5. Construct the Instance with all 9 public inputs
+    /// 6. Verify with MockProver
+    #[test]
+    fn vote_circuit_e2e() {
+        let mut rng = OsRng;
+
+        // --- 1. Create spending key and note ---
+        let sk = crate::keys::SpendingKey::random(&mut rng);
+        let fvk: crate::keys::FullViewingKey = (&sk).into();
+        let recipient = fvk.address_at(0u32, crate::keys::Scope::External);
+
+        let spent_note = Note::new(
+            recipient,
+            NoteValue::from_raw(100),
+            Nullifier::dummy(&mut rng),
+            &mut rng,
+        );
+
+        // --- 2. Build CMX Merkle tree with this note's commitment ---
+        let cmx = ExtractedNoteCommitment::from(spent_note.commitment());
+        let cmx_fp = cmx.inner();
+
+        // Use calculate_merkle_paths to get anchor and auth path
+        let (cmx_root, cmx_paths) =
+            crate::vote::path::calculate_merkle_paths(0, &[0], &[cmx_fp]);
+        let cmx_path = cmx_paths[0].to_orchard_merkle_tree();
+        let anchor = Anchor::from_bytes(cmx_root.to_repr()).unwrap();
+
+        // --- 3. Build NF tree with sentinels ---
+        // Inject 17 sentinels at k * 2^250
+        let step = Fp::from(2u64).pow([250, 0, 0, 0]);
+        let mut nfs: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
+        nfs.sort();
+
+        let (nf_root, ranges, levels) = build_test_nf_tree(&nfs);
+
+        // --- 4. Compute nullifier and find its range ---
+        let nf_old = spent_note.nullifier(&fvk);
+        let nf_fp = Fp::from_repr(nf_old.to_bytes()).unwrap();
+
+        // The nullifier should fall within one of the gap ranges
+        let range_idx = find_range(&ranges, nf_fp)
+            .expect("nullifier should be in a gap range (not a sentinel)");
+        let [nf_low, nf_width] = ranges[range_idx];
+        let nf_path = extract_auth_path(range_idx, &levels);
+        let nf_anchor = Anchor::from_bytes(nf_root.to_repr()).unwrap();
+
+        // --- 5. Compute domain nullifier ---
+        let domain = Fp::from(42u64); // arbitrary election domain
+        let dnf = spent_note.nullifier_domain(&fvk, domain);
+
+        // --- 6. Create output note ---
+        let output_recipient = fvk.address_at(1u32, crate::keys::Scope::External);
+        let rho_new = dnf; // ρ^new = dnf
+        let output_note = Note::from_parts(
+            output_recipient,
+            NoteValue::from_raw(100), // same value (no change)
+            rho_new,
+            crate::note::RandomSeed::random(&mut rng, &rho_new),
+        )
+        .unwrap();
+
+        // --- 7. Build Circuit ---
+        let vote_power = VotePowerInfo::from_parts(
+            dnf,
+            nf_low,
+            nf_width,
+            range_idx as u32,
+            nf_path,
+        );
+
+        let spend_info =
+            SpendInfo::new(fvk.clone(), spent_note, cmx_path).unwrap();
+
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rcv = ValueCommitTrapdoor::random(&mut rng);
+
+        let circuit = Circuit::from_action_context_unchecked(
+            vote_power, spend_info, output_note, alpha, rcv.clone(),
+        );
+
+        // --- 8. Build Instance (public inputs) ---
+        let v_net = NoteValue::from_raw(100) - NoteValue::from_raw(100); // ValueSum
+        let cv_net = ValueCommitment::derive(v_net, rcv);
+
+        let svk: SpendValidatingKey = fvk.into();
+        let rk = svk.randomize(&alpha);
+
+        let output_cmx = ExtractedNoteCommitment::from(output_note.commitment());
+
+        let instance = Instance::from_parts(
+            anchor,
+            cv_net,
+            dnf,
+            rk,
+            output_cmx,
+            domain,
+            nf_anchor,
+        );
+
+        // --- 9. Run MockProver ---
+        // MockProver expects Vec<Vec<Fp>> where outer vec = columns, inner vec = rows.
+        // The vote circuit has one instance column with 9 public inputs.
+        let public_inputs: Vec<Vec<Fp>> = vec![instance.to_halo2_instance()];
+
+        let prover = MockProver::run(MOCK_K, &circuit, public_inputs).unwrap();
+        assert_eq!(prover.verify(), Ok(()), "Vote circuit MockProver verification failed");
+    }
+}

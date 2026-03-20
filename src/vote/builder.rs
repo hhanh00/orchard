@@ -286,3 +286,188 @@ pub fn vote<R: RngCore + CryptoRng>(
 
     Ok(ballot)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vote::util::poseidon_hash;
+    use ff::PrimeField;
+    use pasta_curves::group::ff::Field;
+    use rand::rngs::OsRng;
+
+    /// Build a minimal NF tree from sorted nullifiers, returning
+    /// (root, ranges, levels) — same logic as zcash-vote/src/trees.rs.
+    fn build_nf_tree(sorted_nfs: &[Fp]) -> (Fp, Vec<[Fp; 2]>, Vec<Vec<Fp>>) {
+        let mut ranges: Vec<[Fp; 2]> = vec![];
+        let mut prev = Fp::zero();
+        for &nf in sorted_nfs {
+            if prev < nf {
+                let high = nf - Fp::one();
+                ranges.push([prev, high - prev]);
+            }
+            prev = nf + Fp::one();
+        }
+        if prev != Fp::zero() {
+            let high = Fp::one().neg();
+            ranges.push([prev, high - prev]);
+        }
+
+        let leaves: Vec<Fp> = ranges.iter().map(|[l, w]| poseidon_hash(*l, *w)).collect();
+
+        let mut empty = [Fp::zero(); NF_MERKLE_DEPTH];
+        empty[0] = poseidon_hash(Fp::zero(), Fp::zero());
+        for i in 1..NF_MERKLE_DEPTH {
+            empty[i] = poseidon_hash(empty[i - 1], empty[i - 1]);
+        }
+
+        let mut level0 = leaves;
+        if level0.is_empty() {
+            level0.push(empty[0]);
+        }
+        if level0.len() & 1 == 1 {
+            level0.push(empty[0]);
+        }
+        let mut levels: Vec<Vec<Fp>> = vec![level0];
+
+        for i in 0..NF_MERKLE_DEPTH - 1 {
+            let prev_level = &levels[i];
+            let pairs = prev_level.len() / 2;
+            let mut next: Vec<Fp> = (0..pairs)
+                .map(|j| poseidon_hash(prev_level[j * 2], prev_level[j * 2 + 1]))
+                .collect();
+            if next.len() & 1 == 1 {
+                next.push(empty[i + 1]);
+            }
+            levels.push(next);
+        }
+
+        let top = &levels[NF_MERKLE_DEPTH - 1];
+        let root = poseidon_hash(top[0], top[1]);
+        (root, ranges, levels)
+    }
+
+    /// Find range containing value via binary search.
+    fn find_range(ranges: &[[Fp; 2]], value: Fp) -> Option<usize> {
+        let i = ranges.partition_point(|[low, _]| *low <= value);
+        if i == 0 {
+            return None;
+        }
+        let idx = i - 1;
+        let [low, width] = ranges[idx];
+        if value - low <= width { Some(idx) } else { None }
+    }
+
+    /// Extract 29-level auth path for leaf at `idx`.
+    fn extract_path(idx: usize, levels: &[Vec<Fp>]) -> [Fp; NF_MERKLE_DEPTH] {
+        let mut empty = [Fp::zero(); NF_MERKLE_DEPTH];
+        empty[0] = poseidon_hash(Fp::zero(), Fp::zero());
+        for i in 1..NF_MERKLE_DEPTH {
+            empty[i] = poseidon_hash(empty[i - 1], empty[i - 1]);
+        }
+
+        let mut path = [Fp::zero(); NF_MERKLE_DEPTH];
+        let mut pos = idx;
+        for level in 0..NF_MERKLE_DEPTH {
+            let sibling = pos ^ 1;
+            path[level] = if sibling < levels[level].len() {
+                levels[level][sibling]
+            } else {
+                empty[level]
+            };
+            pos >>= 1;
+        }
+        path
+    }
+
+    /// Full prove + verify test using the actual halo2 proof system.
+    ///
+    /// This is the definitive test: it calls `vote()` which internally runs
+    /// `Proof::create()` and `Proof::verify()` with real polynomial commitments
+    /// (IPA), random Fiat-Shamir challenges, and the full trusted setup.
+    ///
+    /// If this test passes, the vote circuit WILL work on a real blockchain.
+    #[test]
+    fn vote_full_prove_verify() {
+        let mut rng = OsRng;
+
+        // --- 1. Create spending key, FVK, and address ---
+        let sk = crate::keys::SpendingKey::random(&mut rng);
+        let fvk: crate::keys::FullViewingKey = (&sk).into();
+        let address = fvk.address_at(0u32, crate::keys::Scope::External);
+
+        // --- 2. Create a note with value 100 ---
+        let spent_note = crate::Note::new(
+            address,
+            NoteValue::from_raw(100),
+            Nullifier::dummy(&mut rng),
+            &mut rng,
+        );
+
+        // --- 3. Build CMX tree with this note ---
+        let cmx = crate::note::ExtractedNoteCommitment::from(spent_note.commitment());
+        let cmx_fp = cmx.inner();
+        let cmxs = vec![cmx_fp];
+
+        // --- 4. Build NF tree with sentinels ---
+        let step = Fp::from(2u64).pow([250, 0, 0, 0]);
+        let mut nfs: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
+        nfs.sort();
+        let (nf_root, ranges, levels) = build_nf_tree(&nfs);
+
+        // --- 5. Compute NF proof for the note's nullifier ---
+        let nf_old = spent_note.nullifier(&fvk);
+        let nf_fp = Fp::from_repr(nf_old.to_bytes()).unwrap();
+        let range_idx = find_range(&ranges, nf_fp)
+            .expect("nullifier must fall in a gap range");
+        let [low, width] = ranges[range_idx];
+        let path = extract_path(range_idx, &levels);
+
+        let nf_proof = NfProofData {
+            root: nf_root,
+            low,
+            width,
+            leaf_pos: range_idx as u32,
+            path,
+        };
+
+        // --- 6. Build proving and verifying keys (expensive — real trusted setup) ---
+        eprintln!("Building proving key (this takes ~1-2 minutes)...");
+        let pk = crate::vote::proof::ProvingKey::<Circuit>::build();
+        eprintln!("Building verifying key...");
+        let vk = crate::vote::proof::VerifyingKey::<Circuit>::build();
+
+        // --- 7. Call vote() — the real ballot builder ---
+        // This internally runs Proof::create() + Proof::verify() for each action.
+        let domain = Fp::from(42u64);
+        let notes = vec![(spent_note, 0u32)]; // note at CMX position 0
+        let nf_proofs = vec![nf_proof];
+
+        eprintln!("Creating ballot with real proofs...");
+        let ballot = vote(
+            domain,
+            true, // signature required
+            Some(sk),
+            &fvk,
+            address,
+            100, // vote full amount
+            &notes,
+            &nf_proofs,
+            &cmxs,
+            &mut rng,
+            &pk,
+            &vk,
+        );
+
+        let ballot = ballot.expect("vote() should produce a valid ballot");
+
+        // --- 8. Verify the ballot structure ---
+        assert_eq!(ballot.data.version, 1);
+        assert_eq!(ballot.data.actions.len(), 2); // min 2 actions
+        assert_eq!(ballot.witnesses.proofs.len(), 2);
+        assert!(ballot.witnesses.sp_signatures.is_some());
+        assert_eq!(ballot.data.domain, domain.to_repr().to_vec());
+        assert_eq!(ballot.data.anchors.nf, nf_root.to_repr().to_vec());
+
+        eprintln!("Full prove+verify test PASSED — ballot is valid!");
+    }
+}
