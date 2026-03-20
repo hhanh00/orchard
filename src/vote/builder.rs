@@ -4,7 +4,7 @@ use super::{
         VoteProof, VoteSignature,
     },
     circuit::{Circuit, Instance, VotePowerInfo},
-    path::calculate_merkle_paths,
+    path::{calculate_merkle_paths, calculate_poseidon_nf_paths},
     proof::{Proof, ProvingKey, VerifyingKey},
 };
 use crate::{
@@ -106,15 +106,18 @@ pub fn vote<R: RngCore + CryptoRng>(
         let nf = spend.nullifier(&fvk);
         let nf = Fp::from_repr(nf.to_bytes()).unwrap();
         let position = nfs.binary_search(&nf);
-        let nf_position = (match position {
+        // Snap to the start of the range pair and compute range index (leaf index).
+        let pair_start = (match position {
             Ok(position) => position,
             Err(position) => position - 1,
-        } & !1); // snap to even position, ie start of range
-        let nf_start = nfs[nf_position];
-        if nf_start > nf {
+        } & !1);
+        let range_index = pair_start / 2;
+        let nf_low = nfs[pair_start];
+        let nf_width = nfs[pair_start + 1] - nf_low;
+        if nf < nf_low {
             return Err(VoteError::InputError);
         }
-        if nf > nfs[nf_position + 1] {
+        if nf > nf_low + nf_width {
             return Err(VoteError::InputError);
         }
         ballot_secrets.push(BallotActionSecret {
@@ -125,8 +128,9 @@ pub fn vote<R: RngCore + CryptoRng>(
             alpha,
             sp_signkey,
             nf: Nullifier::from_bytes(&nf.to_repr()).unwrap(),
-            nf_start: Nullifier::from_bytes(&nf_start.to_repr()).unwrap(),
-            nf_position: nf_position as u32,
+            nf_low,
+            nf_width,
+            nf_leaf_pos: range_index as u32,
             cmx_position,
             cv_net: cv_net.clone(),
             rk: rk.clone(),
@@ -155,11 +159,12 @@ pub fn vote<R: RngCore + CryptoRng>(
         ballot_actions.push(ballot_action);
     }
 
-    let nf_positions = ballot_secrets
+    // Build Poseidon NF tree and extract authentication paths.
+    let nf_leaf_positions = ballot_secrets
         .iter()
-        .map(|s| s.nf_position)
+        .map(|s| s.nf_leaf_pos)
         .collect::<Vec<_>>();
-    let (nf_root, nf_mps) = calculate_merkle_paths(0, &nf_positions, &nfs);
+    let (nf_root, nf_proofs) = calculate_poseidon_nf_paths(&nf_leaf_positions, &nfs);
 
     let cmx_positions = ballot_secrets
         .iter()
@@ -168,11 +173,11 @@ pub fn vote<R: RngCore + CryptoRng>(
     let (cmx_root, cmx_mps) = calculate_merkle_paths(0, &cmx_positions, &cmxs);
 
     let mut proofs = vec![];
-    for (((secret, public), cmx_mp), nf_mp) in ballot_secrets
+    for (((secret, public), cmx_mp), nf_proof) in ballot_secrets
         .iter()
         .zip(ballot_actions.iter())
         .zip(cmx_mps.iter())
-        .zip(nf_mps.iter())
+        .zip(nf_proofs.iter())
     {
         let cmx = ExtractedNoteCommitment::from_bytes(&as_byte256(&public.cmx)).unwrap();
         let instance = Instance::from_parts(
@@ -184,18 +189,13 @@ pub fn vote<R: RngCore + CryptoRng>(
             domain.clone(),
             Anchor::from_bytes(nf_root.to_repr()).unwrap(),
         );
-        assert_eq!(
-            secret.nf_start,
-            Nullifier::from_bytes(&nfs[secret.nf_position as usize].to_repr()).unwrap()
-        );
-        assert_eq!(nf_mp.position, secret.nf_position);
-
-        let nf_path = nf_mp.to_orchard_merkle_tree();
 
         let vote_power = VotePowerInfo {
             dnf: Nullifier::from_bytes(&as_byte256(&public.nf)).unwrap(),
-            nf_start: secret.nf_start,
-            nf_path,
+            nf_low: nf_proof.low,
+            nf_width: nf_proof.width,
+            nf_pos: nf_proof.leaf_pos,
+            nf_path: nf_proof.path,
         };
 
         let cmx_path = cmx_mp.to_orchard_merkle_tree();

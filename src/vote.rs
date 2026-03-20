@@ -17,7 +17,7 @@ pub use ballot::{Ballot, BallotData};
 pub use circuit::Circuit;
 pub use errors::VoteError;
 pub use frontier::{Frontier, OrchardHash};
-pub use path::calculate_merkle_paths;
+pub use path::{calculate_merkle_paths, calculate_poseidon_nf_paths, NfProofData};
 pub use proof::{ProvingKey, VerifyingKey};
 pub use imt_circuit::NF_MERKLE_DEPTH;
 pub use util::{calculate_domain, poseidon_hash};
