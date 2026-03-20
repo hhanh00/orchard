@@ -5,8 +5,8 @@
 //! - [`MerkleSwapGate`]: constrained conditional swap (3 constraints per level)
 //! - [`synthesize_poseidon_merkle_path`]: walks a Merkle path from leaf to root
 //!
-//! Used by the delegation circuit (depth 29), vote proof (depth 24), and
-//! share reveal (depth 24) in the Zally voting protocol.
+//! Used by the IMT non-membership gadget (depth 29) to verify Poseidon
+//! Merkle paths in the nullifier tree.
 
 use halo2_proofs::{
     circuit::{AssignedCell, Layouter, Value},
