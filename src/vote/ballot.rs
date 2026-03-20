@@ -8,7 +8,7 @@ use crate::{
     Note,
 };
 use blake2b_simd::Params;
-use pasta_curves::Fq;
+use pasta_curves::{Fp, Fq};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -55,8 +55,9 @@ pub struct BallotActionSecret {
     pub alpha: Fq,
     pub sp_signkey: Option<SigningKey<SpendAuth>>,
     pub nf: Nullifier,
-    pub nf_start: Nullifier,
-    pub nf_position: u32,
+    pub nf_low: Fp,
+    pub nf_width: Fp,
+    pub nf_leaf_pos: u32,
     pub cmx_position: u32,
     pub cv_net: ValueCommitment,
     pub rk: VerificationKey<SpendAuth>,

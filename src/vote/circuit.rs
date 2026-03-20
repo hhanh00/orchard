@@ -3,7 +3,7 @@
 use group::{Curve, GroupEncoding};
 use halo2_proofs::{
     circuit::{floor_planner, Layouter, Value},
-    plonk::{self, Advice, Column, Constraints, Expression, Instance as InstanceColumn, Selector},
+    plonk::{self, Advice, Column, Constraints, Instance as InstanceColumn, Selector},
     poly::Rotation,
 };
 use pasta_curves::{arithmetic::CurveAffine, pallas, vesta, Fp};
@@ -36,7 +36,7 @@ use crate::{
         },
         note_commit::{NoteCommitChip, NoteCommitConfig},
     },
-    vote::interval::{IntervalChip, IntervalChipConfig},
+    vote::imt_circuit::{ImtNonMembershipConfig, NF_MERKLE_DEPTH},
 };
 use halo2_gadgets::{
     ecc::{
@@ -75,21 +75,29 @@ const DOMAIN: usize = 8;
 pub struct VotePowerInfo {
     ///
     pub dnf: Nullifier,
-    ///
-    pub nf_start: Nullifier,
-    ///
-    pub nf_path: crate::tree::MerklePath,
+    /// Lower bound of the IMT gap range containing this note's nullifier.
+    pub nf_low: Fp,
+    /// Width of the IMT gap range (`nf_high - nf_low`).
+    pub nf_width: Fp,
+    /// Leaf position in the Poseidon NF Merkle tree.
+    pub nf_pos: u32,
+    /// Poseidon Merkle authentication path (depth 29).
+    pub nf_path: [Fp; NF_MERKLE_DEPTH],
 }
 
 impl VotePowerInfo {
     pub(crate) fn from_parts(
         dnf: Nullifier,
-        nf_start: Nullifier,
-        nf_path: crate::tree::MerklePath,
+        nf_low: Fp,
+        nf_width: Fp,
+        nf_pos: u32,
+        nf_path: [Fp; NF_MERKLE_DEPTH],
     ) -> Self {
         VotePowerInfo {
             dnf,
-            nf_start,
+            nf_low,
+            nf_width,
+            nf_pos,
             nf_path,
         }
     }
@@ -113,7 +121,7 @@ pub struct Config {
     commit_ivk_config: CommitIvkConfig,
     old_note_commit_config: NoteCommitConfig,
     new_note_commit_config: NoteCommitConfig,
-    nf_interval_config: IntervalChipConfig,
+    imt_config: ImtNonMembershipConfig,
 }
 
 impl Config {
@@ -178,9 +186,10 @@ pub struct Circuit {
     psi_old: Value<pallas::Base>,
     rcm_old: Value<NoteCommitTrapdoor>,
     nf_old: Value<Nullifier>,
-    nf_start: Value<Nullifier>,
-    nf_path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
+    nf_low: Value<pallas::Base>,
+    nf_width: Value<pallas::Base>,
     nf_pos: Value<u32>,
+    nf_path: Value<[pallas::Base; NF_MERKLE_DEPTH]>,
     cm_old: Value<NoteCommitment>,
     alpha: Value<pallas::Scalar>,
     ak: Value<SpendValidatingKey>,
@@ -223,9 +232,10 @@ impl Circuit {
             psi_old: Value::known(psi_old),
             rcm_old: Value::known(rcm_old),
             nf_old: Value::known(nf_old),
-            nf_start: Value::known(vote_power.nf_start),
-            nf_path: Value::known(vote_power.nf_path.auth_path()),
-            nf_pos: Value::known(vote_power.nf_path.position()),
+            nf_low: Value::known(vote_power.nf_low),
+            nf_width: Value::known(vote_power.nf_width),
+            nf_pos: Value::known(vote_power.nf_pos),
+            nf_path: Value::known(vote_power.nf_path),
             cm_old: Value::known(spend.note.commitment()),
             alpha: Value::known(alpha),
             ak: Value::known(spend.fvk.clone().into()),
@@ -266,8 +276,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // Constrain v_old - v_new = magnitude * sign    (https://p.z.cash/ZKS:action-cv-net-integrity?partial).
         // Either v_old = 0, or calculated root = anchor (https://p.z.cash/ZKS:action-merkle-path-validity?partial).
-        // Constrain calculated nf_root = nf_anchor
-        // Constrain nf_pos even
+        // Either v_old = 0, or calculated nf_root = nf_anchor
         let q_orchard = meta.selector();
         meta.create_gate("Orchard circuit checks", |meta| {
             let q_orchard = meta.query_selector(q_orchard);
@@ -281,20 +290,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
             let nf_root = meta.query_advice(advices[6], Rotation::cur());
             let nf_anchor = meta.query_advice(advices[7], Rotation::cur());
-
-            // The constraint "nf_pos is even" checks that nf_start is the beginning
-            // of a nf interval (and not the end)
-            // However, it is technically not necessary because nf_end is
-            // the first item of the Merkle Authorization Path and therefore
-            // is the sibling of nf_start
-            // If nf_start were the end of the range, nf_end would be the beginning
-            // and the range check would fail
-            // For clarity, the constraint is still explicitly efforced by the circuit
-            let nf_pos = meta.query_advice(advices[8], Rotation::cur());
-            let nf_pos_half = meta.query_advice(advices[9], Rotation::cur());
-
-            let nf_in_range = meta.query_advice(advices[0], Rotation::next());
-            let one = Expression::Constant(pallas::Base::one());
 
             Constraints::with_selector(
                 q_orchard,
@@ -311,11 +306,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                         "Either v_old = 0, or nf root = anchor",
                         v_old.clone() * (nf_root - nf_anchor),
                     ),
-                    (
-                        "Either v_old = 0, or nf_in_range",
-                        v_old.clone() * (one - nf_in_range),
-                    ),
-                    ("nf_pos is even", nf_pos - nf_pos_half.clone() - nf_pos_half),
                 ],
             )
         });
@@ -432,8 +422,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         let new_note_commit_config =
             NoteCommitChip::configure(meta, advices, sinsemilla_config_2.clone());
 
-        let nf_interval_config =
-            IntervalChip::configure(meta, advices[0], advices[1], advices[2], lookup.0);
+        let imt_config = ImtNonMembershipConfig::configure(meta, &advices);
 
         Config {
             primary,
@@ -449,7 +438,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             commit_ivk_config,
             old_note_commit_config,
             new_note_commit_config,
-            nf_interval_config,
+            imt_config,
         }
     }
 
@@ -465,8 +454,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // Construct the ECC chip.
         let ecc_chip = config.ecc_chip();
 
-        let nf_interval = IntervalChip::construct(config.nf_interval_config.clone());
-
         // Witness private inputs that are used across multiple checks.
         let (
             domain,
@@ -478,9 +465,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             nk,
             v_old,
             v_new,
-            nf_pos,
-            nf_start,
-            nf_end,
         ) = {
             // Witness election domain
             let domain = layouter.assign_region(
@@ -553,34 +537,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 self.v_new,
             )?;
 
-            // Witness nf_pos.
-            let nf_pos = assign_free_advice(
-                layouter.namespace(|| "witness nf_pos"),
-                config.advices[0],
-                self.nf_pos.map(|pos| pallas::Base::from(pos as u64)),
-            )?;
-
-            // Witness nf_start.
-            let nf_start = assign_free_advice(
-                layouter.namespace(|| "witness nf_start"),
-                config.advices[0],
-                self.nf_start.map(|nf| nf.0),
-            )?;
-
-            // Witness nf_end as the first level of the Merkle path
-            // By construction of the exclusion nullifier MT,
-            // Leaves of the tree are pairs of nf_start, nf_end,
-            // therefore nf_start is always the left node and
-            // nf_end the sibling
-            let nf_end = assign_free_advice(
-                layouter.namespace(|| "witness nf_end"),
-                config.advices[0],
-                self.nf_path.map(|p| p[0].0),
-            )?;
-
             (
-                domain, psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, v_new, nf_pos,
-                nf_start, nf_end,
+                domain, psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, v_new,
             )
         };
 
@@ -596,21 +554,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 path,
             );
             let leaf = cm_old.extract_p().inner().clone();
-            merkle_inputs.calculate_root(layouter.namespace(|| "Merkle path"), leaf)?
-        };
-
-        // nullifier Merkle path validity check
-        let nf_root = {
-            let nf_path = self
-                .nf_path
-                .map(|typed_path| typed_path.map(|node| node.inner()));
-            let merkle_inputs = MerklePath::construct(
-                [config.merkle_chip_1(), config.merkle_chip_2()],
-                OrchardHashDomains::MerkleCrh,
-                self.nf_pos,
-                nf_path,
-            );
-            let leaf = nf_start.clone();
             merkle_inputs.calculate_root(layouter.namespace(|| "Merkle path"), leaf)?
         };
 
@@ -864,12 +807,20 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             layouter.constrain_instance(cmx.inner().cell(), config.primary, CMX)?;
         }
 
-        // Range constraint on nf_old
-        let nf_in_range = nf_interval.check_in_interval(
-            layouter.namespace(|| "nf in [nf_start, nf_end]"),
-            nf_old.inner().clone(),
-            nf_start,
-            nf_end,
+        // IMT non-membership proof: proves nf_old falls in gap [low, low+width]
+        // and computes the Poseidon Merkle root of the NF tree.
+        let nf_old_cell = nf_old.inner().clone();
+        let nf_root = super::imt_circuit::synthesize_imt_non_membership(
+            &config.imt_config,
+            &config.poseidon_config,
+            &config.ecc_config,
+            &mut layouter,
+            self.nf_low,
+            self.nf_width,
+            self.nf_pos,
+            self.nf_path,
+            &nf_old_cell,
+            0, // slot label
         )?;
 
         // Constrain the remaining Orchard circuit checks.
@@ -908,11 +859,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     config.advices[7],
                     0,
                 )?;
-                nf_pos.copy_advice(|| "nf_pos", &mut region, config.advices[8], 0)?;
-                let nf_pos_half = self.nf_pos.map(|v| pallas::Base::from((v / 2) as u64));
-                region.assign_advice(|| "half nf_pos", config.advices[9], 0, || nf_pos_half)?;
-
-                nf_in_range.copy_advice(|| "nf_in_range", &mut region, config.advices[0], 1)?;
 
                 config.q_orchard.enable(&mut region, 0)?;
                 Ok(())
