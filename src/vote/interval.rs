@@ -1,10 +1,17 @@
+//! Range-check chip for PIR-compatible nullifier non-membership proofs.
 //!
-use ff::Field;
+//! Proves `value - low <= width` using two soft range checks:
+//!   1. `offset = value - low` fits in M bits (proves value >= low)
+//!   2. `diff = width - offset` fits in M bits (proves offset <= width)
+//!
+//! Returns a boolean (1 = in range, 0 = not in range) so the caller can
+//! conditionally enforce via `v_old * (1 - success) = 0`.
+
 use halo2_gadgets::utilities::lookup_range_check::LookupRangeCheckConfig;
 use halo2_proofs::{
     circuit::{AssignedCell, Chip, Layouter, SimpleFloorPlanner, Value},
     plonk::{
-        Advice, Circuit, Column, ConstraintSystem, Constraints, Error, Expression, Selector,
+        Advice, Circuit, Column, ConstraintSystem, Constraints, Error, Selector,
         TableColumn,
     },
     poly::Rotation,
@@ -13,25 +20,15 @@ use pasta_curves::pallas::Base as Fp;
 
 use super::logical::{IsZeroChip, IsZeroChipConfig};
 
-// RANGES MUST BE LESS THAN 252 BITS WIDE
-
-// We use a max range of 252 bits even though the Fp
-// has a capacity of 254 bits
-// K * NUM_WORDS <= Fp::CAPACITY (254)
-// and K <= 10
-// The only possibility is K = 2 and NUM_WORDS = 127
-// which has a lot of words
-// In practice 252 bits works fine because we are testing
-// against ranges of nullifiers
-// Given more than 2^10 nullifiers, ranges are going to be
-// less than 244 bits wide
+// K * NUM_WORDS = 252 bits — max range width supported.
+// With sentinel nullifiers, all widths < 2^250, well within this limit.
 const K: usize = 9;
 const NUM_WORDS: usize = 28;
 
-///
+/// Configuration for the range-check chip.
 #[derive(Clone, Debug)]
 pub struct IntervalChipConfig {
-    s_interval: Selector,
+    s_range: Selector,
     s_and: Selector,
     a: Column<Advice>,
     b: Column<Advice>,
@@ -41,9 +38,7 @@ pub struct IntervalChipConfig {
     is_zero_config: IsZeroChipConfig,
 }
 
-impl IntervalChipConfig {}
-
-///
+/// Chip that proves `value - low <= width` (PIR-compatible range check).
 #[derive(Clone, Debug)]
 pub struct IntervalChip {
     config: IntervalChipConfig,
@@ -51,7 +46,6 @@ pub struct IntervalChip {
 
 impl Chip<Fp> for IntervalChip {
     type Config = IntervalChipConfig;
-
     type Loaded = ();
 
     fn config(&self) -> &Self::Config {
@@ -64,7 +58,7 @@ impl Chip<Fp> for IntervalChip {
 }
 
 impl IntervalChip {
-    ///
+    /// Configure the range-check chip.
     pub fn configure(
         meta: &mut ConstraintSystem<Fp>,
         a: Column<Advice>,
@@ -75,41 +69,43 @@ impl IntervalChip {
         meta.enable_equality(a);
         meta.enable_equality(b);
         meta.enable_equality(c);
-        let s_interval = meta.selector();
+        let s_range = meta.selector();
         let s_and = meta.selector();
-        // low      | high        | element
-        // 2^M      | y=high-low  | x=element - low
-        // 2^M-y+x-1|
-        meta.create_gate("<", |meta| {
-            let s_interval = meta.query_selector(s_interval);
-            let low = meta.query_advice(a.clone(), Rotation::cur());
-            let high = meta.query_advice(b.clone(), Rotation::cur());
-            let element = meta.query_advice(c.clone(), Rotation::cur());
-            let pow2_m = meta.query_advice(a.clone(), Rotation::next());
-            let y = meta.query_advice(b, Rotation::next());
-            let x = meta.query_advice(c, Rotation::next());
-            let x_shifted = meta.query_advice(a, Rotation(2));
+
+        // Gate layout:
+        //   Row 0: value  | low    | width
+        //   Row 1: offset | diff   | (unused)
+        // Constraints:
+        //   offset = value - low
+        //   diff = width - offset
+        meta.create_gate("range_check", |meta| {
+            let s_range = meta.query_selector(s_range);
+            let value = meta.query_advice(a, Rotation::cur());
+            let low = meta.query_advice(b, Rotation::cur());
+            let width = meta.query_advice(c, Rotation::cur());
+            let offset = meta.query_advice(a, Rotation::next());
+            let diff = meta.query_advice(b, Rotation::next());
             Constraints::with_selector(
-                s_interval,
+                s_range,
                 [
-                    y.clone() - high + low.clone(),
-                    x.clone() - element + low,
-                    x_shifted - (pow2_m - y + x) + Expression::Constant(Fp::one()),
+                    offset.clone() - (value - low),
+                    diff - (width - offset),
                 ],
             )
         });
+
         meta.create_gate("and", |meta| {
             let s_and = meta.query_selector(s_and);
-            let a = meta.query_advice(a.clone(), Rotation::cur());
-            let b = meta.query_advice(b.clone(), Rotation::cur());
-            let c = meta.query_advice(c.clone(), Rotation::cur());
+            let a = meta.query_advice(a, Rotation::cur());
+            let b = meta.query_advice(b, Rotation::cur());
+            let c = meta.query_advice(c, Rotation::cur());
             Constraints::with_selector(s_and, [c - a * b])
         });
 
         let range_config = LookupRangeCheckConfig::configure(meta, b, table_idx);
         let is_zero_config = IsZeroChip::configure(meta, a, b, c);
         IntervalChipConfig {
-            s_interval,
+            s_range,
             s_and,
             a,
             b,
@@ -120,11 +116,12 @@ impl IntervalChip {
         }
     }
 
-    ///
+    /// Construct the chip from its configuration.
     pub fn construct(config: IntervalChipConfig) -> IntervalChip {
         IntervalChip { config }
     }
 
+    /// Load the K-bit lookup table.
     pub(crate) fn load(
         &self,
         mut layouter: impl Layouter<Fp>,
@@ -133,7 +130,6 @@ impl IntervalChip {
         layouter.assign_table(
             || "table_idx",
             |mut table| {
-                // We generate the row values lazily (we only need them during keygen).
                 for index in 0..(1 << K) {
                     table.assign_cell(
                         || "table_idx",
@@ -147,59 +143,60 @@ impl IntervalChip {
         )
     }
 
+    /// Prove that `value - low <= width`.
     ///
-    pub fn check_in_interval(
+    /// Returns a boolean cell: 1 if in range, 0 if not.
+    /// Uses soft range checks (strict=false) so that out-of-range values
+    /// produce a 0 result instead of hard-failing the proof. This allows
+    /// the caller to conditionally enforce via `v_old * (1 - result) = 0`.
+    pub fn check_in_range(
         &self,
-        mut layouter: impl halo2_proofs::circuit::Layouter<Fp>,
-        e: AssignedCell<Fp, Fp>,
+        mut layouter: impl Layouter<Fp>,
+        value: AssignedCell<Fp, Fp>,
         low: AssignedCell<Fp, Fp>,
-        high: AssignedCell<Fp, Fp>,
+        width: AssignedCell<Fp, Fp>,
     ) -> Result<AssignedCell<Fp, Fp>, Error> {
-        // println!("interval {:?} {:?} {:?}", e.value(), low.value(), high.value());
-        let m = NUM_WORDS * K;
         let config = &self.config;
         let is_zero_chip = IsZeroChip::construct(config.is_zero_config.clone());
-        let (x, x_shifted) = layouter.assign_region(
-            || "check interval",
+
+        let (offset, diff) = layouter.assign_region(
+            || "check range",
             |mut region| {
-                config.s_interval.enable(&mut region, 0)?;
-                low.copy_advice(|| "low", &mut region, config.a, 0)?;
-                high.copy_advice(|| "high", &mut region, config.b, 0)?;
-                e.copy_advice(|| "e", &mut region, config.c, 0)?;
-                let pow2_m = Fp::from(2).pow_vartime(&[m as u64]);
-                let pow2_m = region.assign_advice_from_constant(|| "2^m", config.a, 1, pow2_m)?;
-                let y = high.value().zip(low.value()).map(|(high, low)| high - low);
-                let x = e.value().zip(low.value()).map(|(e, low)| e - low);
-                let y = region.assign_advice(|| "y", config.b, 1, || y)?;
-                let x = region.assign_advice(|| "x", config.c, 1, || x)?;
-                let x_shifted = pow2_m
-                    .value()
-                    .zip(y.value())
-                    .zip(x.value())
-                    .map(|((pow2_m, y), x)| pow2_m - y + x - Fp::one());
-                let x_shifted = region.assign_advice(|| "x_shifted", config.a, 2, || x_shifted)?;
-                Ok((x, x_shifted))
+                config.s_range.enable(&mut region, 0)?;
+                value.copy_advice(|| "value", &mut region, config.a, 0)?;
+                low.copy_advice(|| "low", &mut region, config.b, 0)?;
+                width.copy_advice(|| "width", &mut region, config.c, 0)?;
+
+                let offset_val = value.value().zip(low.value()).map(|(v, l)| v - l);
+                let diff_val = width.value().zip(offset_val).map(|(w, o)| w - o);
+
+                let offset = region.assign_advice(|| "offset", config.a, 1, || offset_val)?;
+                let diff = region.assign_advice(|| "diff", config.b, 1, || diff_val)?;
+                Ok((offset, diff))
             },
         )?;
 
+        // Soft range check on offset: does it fit in M = K * NUM_WORDS bits?
         let c1 = config.range_config.copy_check(
-            layouter.namespace(|| "x < 2^M"),
-            x,
+            layouter.namespace(|| "offset < 2^M"),
+            offset,
             NUM_WORDS,
             false,
         )?;
         let c1 = c1.last().unwrap();
-        let c1 = is_zero_chip.is_zero(layouter.namespace(|| "c1 <- !c1"), c1.clone())?;
+        let c1 = is_zero_chip.is_zero(layouter.namespace(|| "c1 <- offset fits"), c1.clone())?;
 
+        // Soft range check on diff: does it fit in M bits?
         let c2 = config.range_config.copy_check(
-            layouter.namespace(|| "x_shifted < 2^M"),
-            x_shifted,
+            layouter.namespace(|| "diff < 2^M"),
+            diff,
             NUM_WORDS,
             false,
         )?;
         let c2 = c2.last().unwrap();
-        let c2 = is_zero_chip.is_zero(layouter.namespace(|| "c2 <- !c2"), c2.clone())?;
+        let c2 = is_zero_chip.is_zero(layouter.namespace(|| "c2 <- diff fits"), c2.clone())?;
 
+        // success = c1 AND c2
         let success = layouter.assign_region(
             || "c1 && c2",
             |mut region| {
@@ -216,6 +213,10 @@ impl IntervalChip {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Test circuit
+// ---------------------------------------------------------------------------
+
 #[derive(Clone)]
 struct TestCircuitConfig {
     interval_config: IntervalChipConfig,
@@ -223,14 +224,13 @@ struct TestCircuitConfig {
 
 #[derive(Default)]
 struct TestCircuit {
-    x: Value<Fp>,
-    a: Value<Fp>,
-    b: Value<Fp>,
+    value: Value<Fp>,
+    low: Value<Fp>,
+    width: Value<Fp>,
 }
 
 impl Circuit<Fp> for TestCircuit {
     type Config = TestCircuitConfig;
-
     type FloorPlanner = SimpleFloorPlanner;
 
     fn without_witnesses(&self) -> Self {
@@ -238,13 +238,13 @@ impl Circuit<Fp> for TestCircuit {
     }
 
     fn configure(meta: &mut ConstraintSystem<Fp>) -> TestCircuitConfig {
-        let x = meta.advice_column();
         let a = meta.advice_column();
         let b = meta.advice_column();
+        let c = meta.advice_column();
         let table_idx = meta.lookup_table_column();
         let f = meta.fixed_column();
         meta.enable_constant(f);
-        let interval_config = IntervalChip::configure(meta, a, b, x, table_idx);
+        let interval_config = IntervalChip::configure(meta, a, b, c, table_idx);
         TestCircuitConfig { interval_config }
     }
 
@@ -258,20 +258,36 @@ impl Circuit<Fp> for TestCircuit {
             layouter.namespace(|| "load lookup table"),
             config.interval_config.table_idx,
         )?;
-        let (e, low, high) = layouter.assign_region(
+        let (value, low, width) = layouter.assign_region(
             || "load witnesses",
             |mut region| {
-                let e = region.assign_advice(|| "x", config.interval_config.a, 0, || self.x)?;
-                let low = region.assign_advice(|| "a", config.interval_config.b, 0, || self.a)?;
-                let high = region.assign_advice(|| "b", config.interval_config.c, 0, || self.b)?;
-                Ok((e, low, high))
+                let value =
+                    region.assign_advice(|| "value", config.interval_config.a, 0, || self.value)?;
+                let low =
+                    region.assign_advice(|| "low", config.interval_config.b, 0, || self.low)?;
+                let width =
+                    region.assign_advice(|| "width", config.interval_config.c, 0, || self.width)?;
+                Ok((value, low, width))
             },
         )?;
-        interval_chip.check_in_interval(
-            layouter.namespace(|| "check in interval"),
-            e,
+        let success = interval_chip.check_in_range(
+            layouter.namespace(|| "check in range"),
+            value,
             low,
-            high,
+            width,
+        )?;
+        // Constrain success == 1 (must be in range for circuit to be satisfied)
+        layouter.assign_region(
+            || "constrain success",
+            |mut region| {
+                let one = region.assign_advice_from_constant(
+                    || "one",
+                    config.interval_config.a,
+                    0,
+                    Fp::one(),
+                )?;
+                region.constrain_equal(success.cell(), one.cell())
+            },
         )?;
         Ok(())
     }
@@ -282,16 +298,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test() -> Result<(), Error> {
+    fn test_value_in_range() -> Result<(), Error> {
+        // value=12, low=10, width=2 → offset=2, diff=0 → both fit ✓
         let test = TestCircuit {
-            x: Value::known(Fp::from(12)),
-            a: Value::known(Fp::from(10)),
-            b: Value::known(Fp::from(12)),
+            value: Value::known(Fp::from(12)),
+            low: Value::known(Fp::from(10)),
+            width: Value::known(Fp::from(2)),
         };
-
         let prover = halo2_proofs::dev::MockProver::run(11, &test, vec![])?;
         prover.verify().unwrap();
-
         Ok(())
+    }
+
+    #[test]
+    fn test_value_at_low_bound() -> Result<(), Error> {
+        // value=10, low=10, width=5 → offset=0, diff=5 → both fit ✓
+        let test = TestCircuit {
+            value: Value::known(Fp::from(10)),
+            low: Value::known(Fp::from(10)),
+            width: Value::known(Fp::from(5)),
+        };
+        let prover = halo2_proofs::dev::MockProver::run(11, &test, vec![])?;
+        prover.verify().unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn test_value_at_high_bound() -> Result<(), Error> {
+        // value=15, low=10, width=5 → offset=5, diff=0 → both fit ✓
+        let test = TestCircuit {
+            value: Value::known(Fp::from(15)),
+            low: Value::known(Fp::from(10)),
+            width: Value::known(Fp::from(5)),
+        };
+        let prover = halo2_proofs::dev::MockProver::run(11, &test, vec![])?;
+        prover.verify().unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn test_value_above_range() {
+        // value=16, low=10, width=5 → offset=6, diff=5-6 wraps → diff doesn't fit
+        let test = TestCircuit {
+            value: Value::known(Fp::from(16)),
+            low: Value::known(Fp::from(10)),
+            width: Value::known(Fp::from(5)),
+        };
+        let prover = halo2_proofs::dev::MockProver::run(11, &test, vec![]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn test_value_below_range() {
+        // value=9, low=10, width=5 → offset=9-10 wraps to huge → doesn't fit
+        let test = TestCircuit {
+            value: Value::known(Fp::from(9)),
+            low: Value::known(Fp::from(10)),
+            width: Value::known(Fp::from(5)),
+        };
+        let prover = halo2_proofs::dev::MockProver::run(11, &test, vec![]).unwrap();
+        assert!(prover.verify().is_err());
     }
 }

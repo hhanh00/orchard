@@ -1,5 +1,6 @@
 use blake2b_simd::Params;
 use ff::FromUniformBytes as _;
+use halo2_gadgets::poseidon::primitives as poseidon;
 use incrementalmerkletree::Hashable as _;
 use pasta_curves::Fp;
 
@@ -47,4 +48,11 @@ pub(crate) fn as_byte256(h: &[u8]) -> [u8; 32] {
     let mut hh = [0u8; 32];
     hh.copy_from_slice(h);
     hh
+}
+
+/// Poseidon hash of two field elements using P128Pow5T3 with ConstantLength<2>.
+/// This matches the hash used by the PIR nullifier tree (imt-tree crate).
+pub fn poseidon_hash(left: Fp, right: Fp) -> Fp {
+    poseidon::Hash::<_, poseidon::P128Pow5T3, poseidon::ConstantLength<2>, 3, 2>::init()
+        .hash([left, right])
 }

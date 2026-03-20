@@ -17,9 +17,10 @@ pub use errors::VoteError;
 pub use frontier::{Frontier, OrchardHash};
 pub use path::calculate_merkle_paths;
 pub use proof::{ProvingKey, VerifyingKey};
-pub use util::calculate_domain;
+pub use util::{calculate_domain, poseidon_hash};
 pub use validate::{try_decrypt_ballot, validate_ballot};
-pub use builder::vote;
+pub use builder::{vote, NfProofData};
+pub use circuit::NF_MERKLE_DEPTH;
 
 type Hash = [u8; 32];
 const DEPTH: usize = 32;

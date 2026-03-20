@@ -3,12 +3,18 @@ use super::{
         Ballot, BallotAction, BallotActionSecret, BallotAnchors, BallotData, BallotWitnesses,
         VoteProof, VoteSignature,
     },
-    circuit::{Circuit, Instance, VotePowerInfo},
+    circuit::{Circuit, Instance, VotePowerInfo, NF_MERKLE_DEPTH},
     path::calculate_merkle_paths,
     proof::{Proof, ProvingKey, VerifyingKey},
 };
 use crate::{
-    builder::SpendInfo, keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey}, note::{ExtractedNoteCommitment, Nullifier, RandomSeed}, note_encryption::OrchardNoteEncryption, primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey}, value::{NoteValue, ValueCommitTrapdoor, ValueCommitment}, Anchor, Note
+    builder::SpendInfo,
+    keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey, SpendingKey},
+    note::{ExtractedNoteCommitment, Nullifier, RandomSeed},
+    note_encryption::OrchardNoteEncryption,
+    primitives::redpallas::{Binding, SigningKey, SpendAuth, VerificationKey},
+    value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
+    Anchor, Note,
 };
 use crate::{vote::util::as_byte256, Address};
 use pasta_curves::{
@@ -20,7 +26,26 @@ use zcash_note_encryption::COMPACT_NOTE_SIZE;
 
 use super::VoteError;
 
+/// Pre-computed proof data for one nullifier's non-membership proof.
+/// Produced by the PIR client or by local tree computation.
+#[derive(Clone, Debug)]
+pub struct NfProofData {
+    /// Merkle root of the nullifier range tree
+    pub root: Fp,
+    /// Lower bound of the gap range
+    pub low: Fp,
+    /// Width of the gap range (high - low)
+    pub width: Fp,
+    /// Leaf position in the tree
+    pub leaf_pos: u32,
+    /// Merkle authentication path (29 sibling hashes)
+    pub path: [Fp; NF_MERKLE_DEPTH],
+}
+
+/// Build a vote ballot.
 ///
+/// `nf_proofs` contains one pre-computed nullifier non-membership proof per input note.
+/// These are obtained either from a PIR server query or from local tree computation.
 pub fn vote<R: RngCore + CryptoRng>(
     domain: Fp,
     signature_required: bool,
@@ -29,17 +54,12 @@ pub fn vote<R: RngCore + CryptoRng>(
     address: Address,
     amount: u64,
     notes: &[(Note, u32)],
-    nfs: &[Fp],
+    nf_proofs: &[NfProofData],
     cmxs: &[Fp],
     mut rng: R,
     pk: &ProvingKey<Circuit>,
     vk: &VerifyingKey<Circuit>,
 ) -> Result<Ballot, VoteError> {
-    // let nfs = list_nf_ranges(connection)?;
-    // let cmxs = list_cmxs(connection)?;
-    // let address = VoteAddress::decode(address)?.0;
-    // let notes = list_notes(connection, 0, fvk)?;
-
     let mut total_value = 0;
     let mut inputs = vec![];
     for np in notes {
@@ -71,16 +91,10 @@ pub fn vote<R: RngCore + CryptoRng>(
         let rseed = RandomSeed::random(&mut rng, &rho);
         let output = match i {
             0 => {
-                let vote_output =
-                    Note::from_parts(address, NoteValue::from_raw(amount), rho, rseed).unwrap();
-                vote_output
+                Note::from_parts(address, NoteValue::from_raw(amount), rho, rseed).unwrap()
             }
             1 => {
-                let change_output =
-                    Note::from_parts(self_address, NoteValue::from_raw(change), rho, rseed)
-                        .unwrap();
-
-                change_output
+                Note::from_parts(self_address, NoteValue::from_raw(change), rho, rseed).unwrap()
             }
             _ => {
                 let (_, _, dummy_output) = Note::dummy(&mut rng, Some(rho));
@@ -93,30 +107,35 @@ pub fn vote<R: RngCore + CryptoRng>(
         total_rcv = total_rcv + &rcv;
         let cv_net = ValueCommitment::derive(cv_net, rcv.clone());
 
-        // Derive from seed if available
         let alpha = Fq::random(&mut rng);
         let svk = SpendValidatingKey::from(fvk.clone());
         let rk = svk.randomize(&alpha);
         let sp_signkey = sk.map(|sk| {
             let spak = SpendAuthorizingKey::from(&sk);
-            let sp_signkey = spak.randomize(&alpha);
-            sp_signkey
+            spak.randomize(&alpha)
         });
 
         let nf = spend.nullifier(&fvk);
-        let nf = Fp::from_repr(nf.to_bytes()).unwrap();
-        let position = nfs.binary_search(&nf);
-        let nf_position = (match position {
-            Ok(position) => position,
-            Err(position) => position - 1,
-        } & !1); // snap to even position, ie start of range
-        let nf_start = nfs[nf_position];
-        if nf_start > nf {
-            return Err(VoteError::InputError);
+        let nf_fp = Fp::from_repr(nf.to_bytes()).unwrap();
+
+        // Get the pre-computed NF proof for this note.
+        // For real inputs (i < inputs.len()), use the corresponding proof.
+        // For dummy actions, use the first proof as a placeholder (it won't be checked
+        // because v_old = 0 makes the circuit skip NF validation).
+        let nf_proof = if i < nf_proofs.len() {
+            &nf_proofs[i]
+        } else {
+            &nf_proofs[0]
+        };
+
+        // Verify the proof data is consistent
+        if i < inputs.len() {
+            let offset = nf_fp - nf_proof.low;
+            if offset > nf_proof.width {
+                return Err(VoteError::InputError);
+            }
         }
-        if nf > nfs[nf_position + 1] {
-            return Err(VoteError::InputError);
-        }
+
         ballot_secrets.push(BallotActionSecret {
             fvk: fvk.clone(),
             spend_note: spend.clone(),
@@ -124,9 +143,12 @@ pub fn vote<R: RngCore + CryptoRng>(
             rcv: rcv.clone(),
             alpha,
             sp_signkey,
-            nf: Nullifier::from_bytes(&nf.to_repr()).unwrap(),
-            nf_start: Nullifier::from_bytes(&nf_start.to_repr()).unwrap(),
-            nf_position: nf_position as u32,
+            nf: Nullifier::from_bytes(&nf_fp.to_repr()).unwrap(),
+            nf_low: nf_proof.low,
+            nf_width: nf_proof.width,
+            nf_pos: nf_proof.leaf_pos,
+            nf_path: nf_proof.path,
+            nf_root: nf_proof.root,
             cmx_position,
             cv_net: cv_net.clone(),
             rk: rk.clone(),
@@ -155,11 +177,8 @@ pub fn vote<R: RngCore + CryptoRng>(
         ballot_actions.push(ballot_action);
     }
 
-    let nf_positions = ballot_secrets
-        .iter()
-        .map(|s| s.nf_position)
-        .collect::<Vec<_>>();
-    let (nf_root, nf_mps) = calculate_merkle_paths(0, &nf_positions, &nfs);
+    // All NF proofs share the same root
+    let nf_root = nf_proofs[0].root;
 
     let cmx_positions = ballot_secrets
         .iter()
@@ -168,11 +187,11 @@ pub fn vote<R: RngCore + CryptoRng>(
     let (cmx_root, cmx_mps) = calculate_merkle_paths(0, &cmx_positions, &cmxs);
 
     let mut proofs = vec![];
-    for (((secret, public), cmx_mp), nf_mp) in ballot_secrets
+    for (i, ((secret, public), cmx_mp)) in ballot_secrets
         .iter()
         .zip(ballot_actions.iter())
         .zip(cmx_mps.iter())
-        .zip(nf_mps.iter())
+        .enumerate()
     {
         let cmx = ExtractedNoteCommitment::from_bytes(&as_byte256(&public.cmx)).unwrap();
         let instance = Instance::from_parts(
@@ -184,19 +203,14 @@ pub fn vote<R: RngCore + CryptoRng>(
             domain.clone(),
             Anchor::from_bytes(nf_root.to_repr()).unwrap(),
         );
-        assert_eq!(
-            secret.nf_start,
-            Nullifier::from_bytes(&nfs[secret.nf_position as usize].to_repr()).unwrap()
+
+        let vote_power = VotePowerInfo::from_parts(
+            Nullifier::from_bytes(&as_byte256(&public.nf)).unwrap(),
+            secret.nf_low,
+            secret.nf_width,
+            secret.nf_pos,
+            secret.nf_path,
         );
-        assert_eq!(nf_mp.position, secret.nf_position);
-
-        let nf_path = nf_mp.to_orchard_merkle_tree();
-
-        let vote_power = VotePowerInfo {
-            dnf: Nullifier::from_bytes(&as_byte256(&public.nf)).unwrap(),
-            nf_start: secret.nf_start,
-            nf_path,
-        };
 
         let cmx_path = cmx_mp.to_orchard_merkle_tree();
 
@@ -210,12 +224,11 @@ pub fn vote<R: RngCore + CryptoRng>(
         );
 
         let instances = std::slice::from_ref(&instance);
-        tracing::info!("Proving");
-        let proof =
-            Proof::<Circuit>::create(pk, &[circuit], instances, &mut rng)?;
-        tracing::info!("Verifying");
+        tracing::info!("Proving action {}", i);
+        let proof = Proof::<Circuit>::create(pk, &[circuit], instances, &mut rng)?;
+        tracing::info!("Verifying action {}", i);
         proof.verify(vk, instances)?;
-        tracing::info!("Proof generated");
+        tracing::info!("Proof generated for action {}", i);
         let proof = proof.as_ref().to_vec();
         proofs.push(VoteProof(proof));
     }
