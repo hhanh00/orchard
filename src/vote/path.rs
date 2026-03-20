@@ -129,8 +129,13 @@ pub struct NfProofData {
 }
 
 /// Compute empty subtree roots for the Poseidon-based NF tree.
+///
+/// `roots[0]` is the empty leaf hash `Poseidon(0, 0)` — i.e. the commitment
+/// of a zero-range leaf.  Each subsequent level is built from two copies of
+/// the level below: `roots[i] = Poseidon(roots[i-1], roots[i-1])`.
 fn poseidon_empty_roots() -> [Fp; NF_MERKLE_DEPTH + 1] {
     let mut roots = [Fp::zero(); NF_MERKLE_DEPTH + 1];
+    roots[0] = poseidon_hash(Fp::zero(), Fp::zero());
     for i in 1..=NF_MERKLE_DEPTH {
         roots[i] = poseidon_hash(roots[i - 1], roots[i - 1]);
     }
