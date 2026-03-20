@@ -7,6 +7,7 @@ mod frontier;
 mod interval;
 mod logical;
 mod path;
+pub(crate) mod poseidon_merkle;
 mod proof;
 mod util;
 mod validate;
