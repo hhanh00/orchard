@@ -56,7 +56,7 @@ use halo2_gadgets::{
             MerklePath,
         },
     },
-    utilities::lookup_range_check::LookupRangeCheckConfig,
+    utilities::lookup_range_check::{LookupRangeCheck, LookupRangeCheckConfig},
 };
 
 pub mod commit_ivk;
@@ -326,6 +326,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 lagrange_coeffs[0],
                 lookup,
                 range_check,
+                false,
             );
             let merkle_config_1 = MerkleChip::configure(meta, sinsemilla_config_1.clone());
 
@@ -344,6 +345,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 lagrange_coeffs[1],
                 lookup,
                 range_check,
+                false,
             );
             let merkle_config_2 = MerkleChip::configure(meta, sinsemilla_config_2.clone());
 

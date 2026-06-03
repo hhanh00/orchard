@@ -23,7 +23,7 @@ use halo2_gadgets::{
         CommitDomain, Message, MessagePiece,
     },
     utilities::{
-        bool_check, lookup_range_check::LookupRangeCheckConfig, FieldValue, RangeConstrained,
+        bool_check, lookup_range_check::{LookupRangeCheck, LookupRangeCheckConfig}, FieldValue, RangeConstrained,
     },
 };
 

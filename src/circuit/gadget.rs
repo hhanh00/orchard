@@ -10,7 +10,7 @@ use crate::constants::{
 };
 use halo2_gadgets::{
     ecc::{
-        chip::EccChip, EccInstructions, FixedPoint, FixedPointBaseField, FixedPointShort, Point,
+        chip::{CircuitVersion, EccChip}, EccInstructions, FixedPoint, FixedPointBaseField, FixedPointShort, Point,
         ScalarFixed, ScalarFixedShort, X,
     },
     poseidon::{
@@ -36,7 +36,7 @@ impl super::Config {
     }
 
     pub(super) fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
-        EccChip::construct(self.ecc_config.clone())
+        EccChip::construct(self.ecc_config.clone(), CircuitVersion::AnchoredBase)
     }
 
     pub(super) fn sinsemilla_chip_1(

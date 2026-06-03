@@ -58,7 +58,7 @@ plotters = { version = "0.3.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.3"
-halo2_gadgets = { version = "0.2", features = ["test-dependencies"] }
+halo2_gadgets = { version = "0.5", features = ["test-dependencies"] }
 hex = { version = "0.4", features = ["serde"] }
 proptest = "1.0.0"
 zcash_note_encryption = { version = "0.2", features = ["pre-zip-212"] }
@@ -96,5 +96,5 @@ debug = true
 debug = true
 
 [patch.crates-io]
-halo2_gadgets = { git = "https://github.com/zcash/halo2.git", rev = "642924d614305d882cc122739c59144109f4bd3f" }
-halo2_proofs = { git = "https://github.com/zcash/halo2.git", rev = "642924d614305d882cc122739c59144109f4bd3f" }
+halo2_gadgets = { git = "https://github.com/zcash/halo2.git", rev = "d751768afe0d2105b349dd93f73fde7f2eade088" }
+halo2_proofs = { git = "https://github.com/zcash/halo2.git", rev = "d751768afe0d2105b349dd93f73fde7f2eade088" }

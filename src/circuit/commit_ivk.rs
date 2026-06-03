@@ -13,7 +13,7 @@ use crate::constants::{OrchardCommitDomains, OrchardFixedBases, OrchardHashDomai
 use halo2_gadgets::{
     ecc::{chip::EccChip, ScalarFixed, X},
     sinsemilla::{chip::SinsemillaChip, CommitDomain, Message, MessagePiece},
-    utilities::{bool_check, RangeConstrained},
+    utilities::{bool_check, lookup_range_check::LookupRangeCheck, RangeConstrained},
 };
 
 #[derive(Clone, Debug)]
