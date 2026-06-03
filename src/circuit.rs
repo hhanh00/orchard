@@ -98,7 +98,7 @@ pub struct Config {
 }
 
 /// The Orchard Action circuit.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Circuit {
     pub(crate) path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
     pub(crate) pos: Value<u32>,
@@ -119,6 +119,34 @@ pub struct Circuit {
     pub(crate) psi_new: Value<pallas::Base>,
     pub(crate) rcm_new: Value<NoteCommitTrapdoor>,
     pub(crate) rcv: Value<ValueCommitTrapdoor>,
+    pub(crate) circuit_version: halo2_gadgets::ecc::chip::CircuitVersion,
+}
+
+impl Default for Circuit {
+    fn default() -> Self {
+        Circuit {
+            path: Value::unknown(),
+            pos: Value::unknown(),
+            g_d_old: Value::unknown(),
+            pk_d_old: Value::unknown(),
+            v_old: Value::unknown(),
+            rho_old: Value::unknown(),
+            psi_old: Value::unknown(),
+            rcm_old: Value::unknown(),
+            cm_old: Value::unknown(),
+            alpha: Value::unknown(),
+            ak: Value::unknown(),
+            nk: Value::unknown(),
+            rivk: Value::unknown(),
+            g_d_new: Value::unknown(),
+            pk_d_new: Value::unknown(),
+            v_new: Value::unknown(),
+            psi_new: Value::unknown(),
+            rcm_new: Value::unknown(),
+            rcv: Value::unknown(),
+            circuit_version: halo2_gadgets::ecc::chip::CircuitVersion::AnchoredBase,
+        }
+    }
 }
 
 impl Circuit {
@@ -147,11 +175,41 @@ impl Circuit {
             .then(|| Self::from_action_context_unchecked(spend, output_note, alpha, rcv))
     }
 
+    /// Constructs a `Circuit` for a specific circuit version from action context.
+    ///
+    /// See [`Circuit::from_action_context`] for details.
+    pub fn from_action_context_for_version(
+        spend: SpendInfo,
+        output_note: Note,
+        alpha: pallas::Scalar,
+        rcv: ValueCommitTrapdoor,
+        circuit_version: halo2_gadgets::ecc::chip::CircuitVersion,
+    ) -> Option<Circuit> {
+        (spend.note.nullifier(&spend.fvk) == output_note.rho())
+            .then(|| Self::from_action_context_unchecked_for_version(spend, output_note, alpha, rcv, circuit_version))
+    }
+
     pub(crate) fn from_action_context_unchecked(
         spend: SpendInfo,
         output_note: Note,
         alpha: pallas::Scalar,
         rcv: ValueCommitTrapdoor,
+    ) -> Circuit {
+        Self::from_action_context_unchecked_for_version(
+            spend,
+            output_note,
+            alpha,
+            rcv,
+            halo2_gadgets::ecc::chip::CircuitVersion::AnchoredBase,
+        )
+    }
+
+    pub(crate) fn from_action_context_unchecked_for_version(
+        spend: SpendInfo,
+        output_note: Note,
+        alpha: pallas::Scalar,
+        rcv: ValueCommitTrapdoor,
+        circuit_version: halo2_gadgets::ecc::chip::CircuitVersion,
     ) -> Circuit {
         let sender_address = spend.note.recipient();
         let rho_old = spend.note.rho();
@@ -182,6 +240,7 @@ impl Circuit {
             psi_new: Value::known(psi_new),
             rcm_new: Value::known(rcm_new),
             rcv: Value::known(rcv),
+            circuit_version,
         }
     }
 }
@@ -191,7 +250,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
     type FloorPlanner = floor_planner::V1;
 
     fn without_witnesses(&self) -> Self {
-        Self::default()
+        let mut c = Self::default();
+        c.circuit_version = self.circuit_version;
+        c
     }
 
     fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
@@ -393,7 +454,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         SinsemillaChip::load(config.sinsemilla_config_1.clone(), &mut layouter)?;
 
         // Construct the ECC chip.
-        let ecc_chip = config.ecc_chip();
+        let ecc_chip = config.ecc_chip_with_version(self.circuit_version);
 
         // Witness private inputs that are used across multiple checks.
         let (psi_old, rho_old, cm_old, g_d_old, ak_P, nk, v_old, v_new) = {
@@ -629,7 +690,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     "g★_d || pk★_d || i2lebsp_{64}(v) || i2lebsp_{255}(rho) || i2lebsp_{255}(psi)"
                 }),
                 config.sinsemilla_chip_1(),
-                config.ecc_chip(),
+                config.ecc_chip_with_version(self.circuit_version),
                 config.note_commit_chip_old(),
                 g_d_old.inner(),
                 pk_d_old.inner(),
@@ -687,7 +748,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     "g★_d || pk★_d || i2lebsp_{64}(v) || i2lebsp_{255}(rho) || i2lebsp_{255}(psi)"
                 }),
                 config.sinsemilla_chip_2(),
-                config.ecc_chip(),
+                config.ecc_chip_with_version(self.circuit_version),
                 config.note_commit_chip_new(),
                 g_d_new.inner(),
                 pk_d_new.inner(),
@@ -763,10 +824,16 @@ pub struct VerifyingKey {
 }
 
 impl VerifyingKey {
-    /// Builds the verifying key.
+    /// Builds the verifying key for the fixed (post-NU6.2) circuit.
     pub fn build() -> Self {
+        Self::build_for_version(halo2_gadgets::ecc::chip::CircuitVersion::AnchoredBase)
+    }
+
+    /// Builds the verifying key for a specific circuit version.
+    pub fn build_for_version(version: halo2_gadgets::ecc::chip::CircuitVersion) -> Self {
         let params = halo2_proofs::poly::commitment::Params::new(K);
-        let circuit: Circuit = Default::default();
+        let mut circuit = Circuit::default();
+        circuit.circuit_version = version;
 
         let vk = plonk::keygen_vk(&params, &circuit).unwrap();
 
@@ -779,18 +846,30 @@ impl VerifyingKey {
 pub struct ProvingKey {
     params: halo2_proofs::poly::commitment::Params<vesta::Affine>,
     pk: plonk::ProvingKey<vesta::Affine>,
+    /// The circuit version this proving key was built for.
+    pub circuit_version: halo2_gadgets::ecc::chip::CircuitVersion,
 }
 
 impl ProvingKey {
-    /// Builds the proving key.
+    /// Builds the proving key for the fixed (post-NU6.2) circuit.
     pub fn build() -> Self {
+        Self::build_for_version(halo2_gadgets::ecc::chip::CircuitVersion::AnchoredBase)
+    }
+
+    /// Builds the proving key for a specific circuit version.
+    pub fn build_for_version(version: halo2_gadgets::ecc::chip::CircuitVersion) -> Self {
         let params = halo2_proofs::poly::commitment::Params::new(K);
-        let circuit: Circuit = Default::default();
+        let mut circuit = Circuit::default();
+        circuit.circuit_version = version;
 
         let vk = plonk::keygen_vk(&params, &circuit).unwrap();
         let pk = plonk::keygen_pk(&params, vk, &circuit).unwrap();
 
-        ProvingKey { params, pk }
+        ProvingKey {
+            params,
+            pk,
+            circuit_version: version,
+        }
     }
 }
 

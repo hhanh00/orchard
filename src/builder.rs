@@ -210,7 +210,11 @@ impl ActionInfo {
     /// Defined in [Zcash Protocol Spec § 4.7.3: Sending Notes (Orchard)][orchardsend].
     ///
     /// [orchardsend]: https://zips.z.cash/protocol/nu5.pdf#orchardsend
-    fn build(self, mut rng: impl RngCore) -> (Action<SigningMetadata>, Circuit) {
+    fn build(
+        self,
+        mut rng: impl RngCore,
+        circuit_version: halo2_gadgets::ecc::chip::CircuitVersion,
+    ) -> (Action<SigningMetadata>, Circuit) {
         let v_net = self.value_sum();
         let cv_net = ValueCommitment::derive(v_net, self.rcv.clone());
 
@@ -252,7 +256,13 @@ impl ActionInfo {
                     parts: SigningParts { ak, alpha },
                 },
             ),
-            Circuit::from_action_context_unchecked(self.spend, note, alpha, self.rcv),
+            Circuit::from_action_context_unchecked_for_version(
+                self.spend,
+                note,
+                alpha,
+                self.rcv,
+                circuit_version,
+            ),
         )
     }
 }
@@ -265,16 +275,32 @@ pub struct Builder {
     recipients: Vec<RecipientInfo>,
     flags: Flags,
     anchor: Anchor,
+    circuit_version: halo2_gadgets::ecc::chip::CircuitVersion,
 }
 
 impl Builder {
-    /// Constructs a new empty builder for an Orchard bundle.
+    /// Constructs a new empty builder for an Orchard bundle, using the fixed
+    /// (post-NU6.2) circuit version.
     pub fn new(flags: Flags, anchor: Anchor) -> Self {
+        Self::new_for_version(flags, anchor, halo2_gadgets::ecc::chip::CircuitVersion::AnchoredBase)
+    }
+
+    /// Constructs a new empty builder for an Orchard bundle with a specific
+    /// circuit version. Use [`CircuitVersion::InsecureUnanchoredBase`] for
+    /// pre-NU6.2 transactions.
+    ///
+    /// [`CircuitVersion::InsecureUnanchoredBase`]: halo2_gadgets::ecc::chip::CircuitVersion::InsecureUnanchoredBase
+    pub fn new_for_version(
+        flags: Flags,
+        anchor: Anchor,
+        circuit_version: halo2_gadgets::ecc::chip::CircuitVersion,
+    ) -> Self {
         Builder {
             spends: vec![],
             recipients: vec![],
             flags,
             anchor,
+            circuit_version,
         }
     }
 
@@ -424,6 +450,7 @@ impl Builder {
         // Move some things out of self that we will need.
         let flags = self.flags;
         let anchor = self.anchor;
+        let circuit_version = self.circuit_version;
 
         // Determine the value balance for this bundle, ensuring it is valid.
         let value_balance = pre_actions
@@ -446,7 +473,7 @@ impl Builder {
 
         // Create the actions.
         let (actions, circuits): (Vec<_>, Vec<_>) =
-            pre_actions.into_iter().map(|a| a.build(&mut rng)).unzip();
+            pre_actions.into_iter().map(|a| a.build(&mut rng, circuit_version)).unzip();
 
         // Verify that bsk and bvk are consistent.
         let bvk = (actions.iter().map(|a| a.cv_net()).sum::<ValueCommitment>()

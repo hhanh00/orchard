@@ -36,7 +36,14 @@ impl super::Config {
     }
 
     pub(super) fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
-        EccChip::construct(self.ecc_config.clone(), CircuitVersion::AnchoredBase)
+        self.ecc_chip_with_version(CircuitVersion::AnchoredBase)
+    }
+
+    pub(super) fn ecc_chip_with_version(
+        &self,
+        version: CircuitVersion,
+    ) -> EccChip<OrchardFixedBases> {
+        EccChip::construct(self.ecc_config.clone(), version)
     }
 
     pub(super) fn sinsemilla_chip_1(
