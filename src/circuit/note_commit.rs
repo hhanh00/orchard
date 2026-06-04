@@ -22,7 +22,7 @@ use crate::{
 };
 use halo2_gadgets::{
     ecc::{
-        chip::{EccChip, NonIdentityEccPoint},
+        chip::{CircuitVersion, EccChip, NonIdentityEccPoint},
         NonIdentityPoint, Point, ScalarFixed,
     },
     sinsemilla::{
@@ -2772,7 +2772,7 @@ mod tests {
                     SinsemillaChip::construct(note_commit_config.sinsemilla_config.clone());
 
                 // Construct an ECC chip
-                let ecc_chip = EccChip::construct(ecc_config);
+                let ecc_chip = EccChip::construct(ecc_config, CircuitVersion::AnchoredBase);
 
                 // Construct a NoteCommit chip
                 let note_commit_chip = NoteCommitChip::construct(note_commit_config.clone());
@@ -3101,7 +3101,7 @@ mod tests {
                     SinsemillaChip::construct(note_commit_config.sinsemilla_config.clone());
 
                 // Construct an ECC chip
-                let ecc_chip = EccChip::construct(ecc_config);
+                let ecc_chip = EccChip::construct(ecc_config, CircuitVersion::AnchoredBase);
 
                 // Construct a NoteCommit chip
                 let note_commit_chip = NoteCommitChip::construct(note_commit_config.clone());

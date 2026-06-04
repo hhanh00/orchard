@@ -16,7 +16,8 @@ use pasta_curves::pallas;
 
 use crate::constants::{OrchardCommitDomains, OrchardFixedBases, T_P};
 use halo2_gadgets::{
-    ecc::{chip::EccChip, ScalarFixed, X},
+    ecc::chip::{CircuitVersion, EccChip},
+    ecc::{ScalarFixed, X},
     sinsemilla::{CommitDomain, Message, MessagePiece},
     utilities::{bool_check, RangeConstrained},
 };
@@ -833,7 +834,7 @@ mod tests {
             let sinsemilla_chip = SinsemillaChip::construct(sinsemilla_config);
 
             // Construct an ECC chip
-            let ecc_chip = EccChip::construct(ecc_config);
+            let ecc_chip = EccChip::construct(ecc_config, CircuitVersion::AnchoredBase);
 
             let commit_ivk_chip = CommitIvkChip::construct(commit_ivk_config.clone());
 

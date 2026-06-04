@@ -5,7 +5,8 @@ use pasta_curves::pallas;
 use crate::constants::{OrchardCommitDomains, OrchardFixedBases, OrchardHashDomains};
 
 use halo2_gadgets::{
-    ecc::{chip::EccChip, NonIdentityPoint},
+    ecc::chip::{CircuitVersion, EccChip},
+    ecc::NonIdentityPoint,
     sinsemilla::chip::SinsemillaChip,
     utilities::lookup_range_check::PallasLookupRangeCheck,
 };
@@ -278,7 +279,7 @@ mod tests {
                 SinsemillaChip::load(config.sinsemilla_config.clone(), &mut layouter)?;
 
                 // Construct an ECC chip
-                let ecc_chip = EccChip::construct(config.ecc_config);
+                let ecc_chip = EccChip::construct(config.ecc_config, CircuitVersion::AnchoredBase);
 
                 let sinsemilla_chip = SinsemillaChip::construct(config.sinsemilla_config.clone());
 

@@ -7,7 +7,7 @@ use super::{commit_ivk::CommitIvkChip, note_commit::NoteCommitChip, Config};
 use crate::constants::{OrchardCommitDomains, OrchardFixedBases, OrchardHashDomains};
 use crate::note::AssetBase;
 use halo2_gadgets::{
-    ecc::chip::EccChip,
+    ecc::chip::{CircuitVersion, EccChip},
     poseidon::Pow5Chip as PoseidonChip,
     sinsemilla::{chip::SinsemillaChip, merkle::chip::MerkleChip},
     utilities::{cond_swap::CondSwapChip, lookup_range_check::PallasLookupRangeCheck},
@@ -29,7 +29,7 @@ impl<Lookup: PallasLookupRangeCheck> Config<Lookup> {
     }
 
     pub(super) fn ecc_chip(&self) -> EccChip<OrchardFixedBases, Lookup> {
-        EccChip::construct(self.ecc_config.clone())
+        EccChip::construct(self.ecc_config.clone(), CircuitVersion::AnchoredBase)
     }
 
     pub(super) fn sinsemilla_chip_1(
