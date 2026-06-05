@@ -7,14 +7,17 @@ use core::fmt;
 
 use getset::Getters;
 use pasta_curves::pallas;
-use zcash_note_encryption::OutgoingCipherKey;
+use zcash_note_encryption::{note_bytes::NoteBytes, OutgoingCipherKey};
 use zip32::ChildIndex;
 
 use crate::{
     bundle::Flags,
     keys::{FullViewingKey, SpendingKey},
-    note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext},
-    primitives::redpallas::{self, Binding, SpendAuth},
+    note::{AssetBase, ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
+    primitives::{
+        redpallas::{self, Binding, SpendAuth},
+        OrchardPrimitives,
+    },
     tree::MerklePath,
     value::{NoteValue, ValueCommitTrapdoor, ValueCommitment, ValueSum},
     Address, Anchor, Proof,
@@ -86,6 +89,13 @@ pub struct Bundle {
     /// - This is `None` until it is set by the IO Finalizer.
     /// - The Transaction Extractor uses this to produce the binding signature.
     pub(crate) bsk: Option<redpallas::SigningKey<Binding>>,
+
+    /// The burn values for this bundle (ZSA only).
+    ///
+    /// Each entry is a pair of (asset, value) representing an amount of that asset
+    /// being burned in this transaction. For vanilla transactions, this is empty.
+    #[getset(get = "pub")]
+    pub(crate) burn: Vec<(AssetBase, NoteValue)>,
 }
 
 impl Bundle {
@@ -161,6 +171,12 @@ pub struct Spend {
     /// information, or after signatures have been applied, this can be redacted.
     pub(crate) value: Option<NoteValue>,
 
+    /// The asset base for the note being spent.
+    ///
+    /// - This is set by the Constructor.
+    /// - Required to verify the nullifier for ZSA (non-zatoshi) spends.
+    pub(crate) asset: Option<AssetBase>,
+
     /// The rho value for the note being spent.
     ///
     /// - This is set by the Constructor.
@@ -175,6 +191,18 @@ pub struct Spend {
     /// - This is set by the Constructor.
     /// - This is required by the Prover.
     pub(crate) rseed: Option<RandomSeed>,
+
+    /// The split note seed randomness, if this is a split spend.
+    ///
+    /// When present, this is used instead of `rseed` for nullifier derivation
+    /// (ZIP-226 § Split Notes). For regular (non-split) spends this is `None`.
+    pub(crate) rseed_split_note: Option<RandomSeed>,
+
+    /// Whether this spend is a split spend.
+    ///
+    /// Split spends have their value excluded from the value sum to prevent
+    /// double-counting, per ZIP-226.
+    pub(crate) split_flag: bool,
 
     /// The full viewing key that received the note being spent.
     ///
@@ -218,13 +246,27 @@ pub struct Output {
     /// A commitment to the new note being created.
     pub(crate) cmx: ExtractedNoteCommitment,
 
-    /// The transmitted note ciphertext.
+    /// The ephemeral public key for the encrypted note.
+    pub(crate) ephemeral_key: [u8; 32],
+
+    /// The encrypted note ciphertext.
     ///
-    /// This contains the following PCZT fields:
-    /// - `ephemeral_key`
-    /// - `enc_ciphertext`
-    /// - `out_ciphertext`
-    pub(crate) encrypted_note: TransmittedNoteCiphertext,
+    /// Stored as raw bytes because the length differs between vanilla (580 bytes)
+    /// and ZSA (612 bytes). The typed [`TransmittedNoteCiphertext`] is reconstructed
+    /// at extraction time based on the bundle's flavor.
+    ///
+    /// [`TransmittedNoteCiphertext`]: crate::note::TransmittedNoteCiphertext
+    pub(crate) enc_ciphertext: Vec<u8>,
+
+    /// The encrypted outgoing ciphertext.
+    pub(crate) out_ciphertext: [u8; 80],
+
+    /// The asset base for this output.
+    ///
+    /// For vanilla transactions, this is always [`AssetBase::zatoshi()`].
+    /// For ZSA transactions, this can be any custom asset.
+    #[getset(get = "pub")]
+    pub(crate) asset: AssetBase,
 
     /// The address that will receive the output.
     ///
@@ -279,7 +321,9 @@ impl fmt::Debug for Output {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Output")
             .field("cmx", &self.cmx)
-            .field("encrypted_note", &self.encrypted_note)
+            .field("ephemeral_key", &self.ephemeral_key)
+            .field("enc_ciphertext_len", &self.enc_ciphertext.len())
+            .field("asset", &self.asset)
             .field("recipient", &self.recipient)
             .field("value", &self.value)
             .field("rseed", &self.rseed)
@@ -287,6 +331,25 @@ impl fmt::Debug for Output {
             .field("user_address", &self.user_address)
             .field("proprietary", &self.proprietary)
             .finish_non_exhaustive()
+    }
+}
+
+impl Output {
+    /// Reconstructs a typed [`TransmittedNoteCiphertext`] from the raw stored bytes,
+    /// using the given flavor.
+    ///
+    /// Returns `None` if the stored ciphertext bytes don't match the expected size
+    /// for the given flavor.
+    ///
+    /// [`TransmittedNoteCiphertext`]: crate::note::TransmittedNoteCiphertext
+    pub fn encrypted_note<Pr: OrchardPrimitives>(
+        &self,
+    ) -> Option<crate::note::TransmittedNoteCiphertext<Pr>> {
+        Some(crate::note::TransmittedNoteCiphertext {
+            epk_bytes: self.ephemeral_key,
+            enc_ciphertext: Pr::NoteCiphertextBytes::from_slice(&self.enc_ciphertext)?,
+            out_ciphertext: self.out_ciphertext,
+        })
     }
 }
 
@@ -342,8 +405,9 @@ mod tests {
         builder::{Builder, BundleType},
         circuit::ProvingKey,
         constants::MERKLE_DEPTH_ORCHARD,
+        flavor::{OrchardVanilla, OrchardZSA},
         keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
-        note::{ExtractedNoteCommitment, RandomSeed, Rho},
+        note::{AssetBase, ExtractedNoteCommitment, RandomSeed, Rho},
         pczt::{ProverError, TxExtractorError, Zip32Derivation},
         primitives::redpallas::{self, SpendAuth},
         tree::{MerkleHashOrchard, EMPTY_ROOTS},
@@ -363,7 +427,7 @@ mod tests {
             EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
         );
         builder
-            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
+            .add_output(None, recipient, NoteValue::from_raw(5000), AssetBase::zatoshi(), [0u8; 512])
             .unwrap();
         let mut pczt_bundle = builder.build_for_pczt(&mut rng).unwrap().0;
 
@@ -379,7 +443,7 @@ mod tests {
 
     #[test]
     fn shielding_bundle() {
-        let pk = ProvingKey::build();
+        let pk = ProvingKey::build::<OrchardVanilla>();
         let mut rng = OsRng;
 
         let sk = SpendingKey::random(&mut rng);
@@ -392,7 +456,13 @@ mod tests {
             EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
         );
         builder
-            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
+            .add_output(
+                None,
+                recipient,
+                NoteValue::from_raw(5000),
+                AssetBase::zatoshi(),
+                [0u8; 512],
+            )
             .unwrap();
         let balance: i64 = builder.value_balance().unwrap();
         assert_eq!(balance, -5000);
@@ -415,7 +485,7 @@ mod tests {
 
     #[test]
     fn shielded_bundle() {
-        let pk = ProvingKey::build();
+        let pk = ProvingKey::build::<OrchardVanilla>();
         let mut rng = OsRng;
 
         // Pretend we derived the spending key via ZIP 32.
@@ -430,9 +500,14 @@ mod tests {
         let note = {
             let rho = Rho::from_bytes(&pallas::Base::random(&mut rng).to_repr()).unwrap();
             loop {
-                if let Some(note) =
-                    Note::from_parts(recipient, value, rho, RandomSeed::random(&mut rng, &rho))
-                        .into_option()
+                if let Some(note) = Note::from_parts(
+                    recipient,
+                    value,
+                    AssetBase::zatoshi(),
+                    rho,
+                    RandomSeed::random(&mut rng, &rho),
+                )
+                .into_option()
                 {
                     break note;
                 }
@@ -469,13 +544,20 @@ mod tests {
             .add_spend(fvk.clone(), note, merkle_path.into())
             .unwrap();
         builder
-            .add_output(None, recipient, NoteValue::from_raw(10_000), [0u8; 512])
+            .add_output(
+                None,
+                recipient,
+                NoteValue::from_raw(10_000),
+                AssetBase::zatoshi(),
+                [0u8; 512],
+            )
             .unwrap();
         builder
             .add_output(
                 Some(fvk.to_ovk(Scope::Internal)),
                 fvk.address_at(0u32, Scope::Internal),
                 NoteValue::from_raw(5_000),
+                AssetBase::zatoshi(),
                 [0u8; 512],
             )
             .unwrap();
@@ -524,7 +606,7 @@ mod tests {
 
     #[test]
     fn create_proof_rejects_identity_rk() {
-        let pk = ProvingKey::build();
+        let pk = ProvingKey::build::<OrchardVanilla>();
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
@@ -538,7 +620,7 @@ mod tests {
 
     #[test]
     fn extract_rejects_identity_rk() {
-        let pk = ProvingKey::build();
+        let pk = ProvingKey::build::<OrchardVanilla>();
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
@@ -555,9 +637,127 @@ mod tests {
         ));
     }
 
+    /// Tests that ZSA-sized ciphertexts (612 bytes) are produced for ZSA bundles
+    /// and that the raw bytes round-trip correctly.
+    #[test]
+    fn zsa_ciphertext_roundtrip() {
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        // In a ZSA bundle, all outputs use ZSA flavor (612-byte ciphertexts),
+        // even zatoshi-valued outputs (for consistency with padding dummies).
+        let mut builder = Builder::new(
+            BundleType::DEFAULT_ZSA,
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+        );
+        builder
+            .add_output(None, recipient, NoteValue::from_raw(5000), AssetBase::zatoshi(), [0u8; 512])
+            .unwrap();
+        let pczt_bundle = builder.build_for_pczt(&mut rng).unwrap().0;
+        assert!(pczt_bundle.flags().zsa_enabled());
+
+        let action = &pczt_bundle.actions()[0];
+        assert_eq!(action.output().asset(), &AssetBase::zatoshi());
+        // ZSA bundle → ZSA-sized ciphertexts even for zatoshi outputs
+        assert_eq!(action.output().enc_ciphertext().len(), 612);
+
+        // encrypted_note::<OrchardZSA>() should succeed (612 bytes)
+        assert!(action.output().encrypted_note::<OrchardZSA>().is_some());
+        // encrypted_note::<OrchardVanilla>() should fail (wrong size: 612 != 580)
+        assert!(action.output().encrypted_note::<OrchardVanilla>().is_none());
+    }
+
+    /// Verify that AssetBase::random produces a different point from zatoshi.
+    #[test]
+    fn asset_base_random_is_not_zatoshi() {
+        let mut rng = OsRng;
+        let random = AssetBase::random(&mut rng);
+        assert_ne!(random, AssetBase::zatoshi());
+    }
+
+    /// Full ZSA PCZT pipeline with a non-zatoshi asset spend.
+    #[test]
+    fn zsa_shielded_bundle() {
+        let pk = ProvingKey::build::<OrchardZSA>();
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let ask = SpendAuthorizingKey::from(&sk);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        // Create a non-zatoshi AssetBase and a prior note of that asset.
+        let non_zatoshi_asset = AssetBase::random(&mut rng);
+        assert_ne!(non_zatoshi_asset, AssetBase::zatoshi());
+
+        let value = NoteValue::from_raw(15_000);
+        let note = {
+            let rho = Rho::from_bytes(&pallas::Base::random(&mut rng).to_repr()).unwrap();
+            loop {
+                if let Some(note) = Note::from_parts(
+                    recipient, value, non_zatoshi_asset, rho,
+                    RandomSeed::random(&mut rng, &rho),
+                ).into_option() {
+                    break note;
+                }
+            }
+        };
+
+        // Build a Merkle tree with this note.
+        let (anchor, merkle_path) = {
+            let cmx: ExtractedNoteCommitment = note.commitment().into();
+            let leaf = MerkleHashOrchard::from_cmx(&cmx);
+            let mut tree: ShardTree<MemoryShardStore<MerkleHashOrchard, u32>, 32, 16> =
+                ShardTree::new(MemoryShardStore::empty(), 100);
+            tree.append(leaf, Retention::Checkpoint { id: 0, marking: Marking::Marked }).unwrap();
+            let root = tree.root_at_checkpoint_id(&0).unwrap().unwrap();
+            let position = tree.max_leaf_position(None).unwrap().unwrap();
+            let merkle_path = tree.witness_at_checkpoint_id(position, &0).unwrap().unwrap();
+            (root.into(), merkle_path)
+        };
+
+        // Build PCZT with ZSA flags: 1 spend + 1 output of non-zatoshi asset.
+        // 1:1 ratio avoids split notes (not yet supported in PCZT).
+        let mut builder = Builder::new(BundleType::DEFAULT_ZSA, anchor);
+        builder.add_spend(fvk.clone(), note, merkle_path.into()).unwrap();
+        builder.add_output(
+            Some(fvk.to_ovk(Scope::Internal)),
+            fvk.address_at(0u32, Scope::Internal),
+            NoteValue::from_raw(15_000),
+            non_zatoshi_asset,
+            [0u8; 512],
+        ).unwrap();
+        let mut pczt_bundle = builder.build_for_pczt(&mut rng).unwrap().0;
+        assert!(pczt_bundle.flags().zsa_enabled());
+
+        // In a ZSA bundle, ALL outputs have 612-byte ciphertexts (including dummies).
+        for action in pczt_bundle.actions() {
+            assert_eq!(action.output().enc_ciphertext().len(), 612,
+                "ZSA bundle outputs must be 612 bytes, got {}", action.output().enc_ciphertext().len());
+        }
+
+        // Sign the real spend BEFORE finalize_io (which clears dummy_sk via take()).
+        let sighash = [0; 32];
+        for action in pczt_bundle.actions_mut() {
+            if action.spend().dummy_sk().is_none() {
+                action.sign(sighash, &ask, OsRng).unwrap();
+            }
+        }
+
+        // Run IO Finalizer (signs dummy spends), then prover, extract, bind.
+        pczt_bundle.finalize_io(sighash, OsRng).unwrap();
+
+        pczt_bundle.create_proof(&pk, OsRng).unwrap();
+        let bundle = pczt_bundle.extract_zsa::<i64>().unwrap().unwrap();
+        bundle.apply_binding_signature(sighash, OsRng).unwrap();
+    }
+
     #[test]
     fn extract_rejects_non_canonical_proof() {
-        let pk = ProvingKey::build();
+        let pk = ProvingKey::build::<OrchardVanilla>();
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);

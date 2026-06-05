@@ -273,7 +273,7 @@ mod tests {
 
         let xsk_5h = xsk_m.derive_child(ChildIndex::hardened(5)).unwrap();
         assert!(bool::from(
-            ExtendedSpendingKey::from_path(&seed, &[ChildIndex::hardened(5)])
+            ExtendedSpendingKey::from_path(&seed, &[ChildIndex::hardened(5)],)
                 .unwrap()
                 .ct_eq(&xsk_5h)
         ));
@@ -282,7 +282,7 @@ mod tests {
         assert!(bool::from(
             ExtendedSpendingKey::from_path(
                 &seed,
-                &[ChildIndex::hardened(5), ChildIndex::hardened(7)]
+                &[ChildIndex::hardened(5), ChildIndex::hardened(7)],
             )
             .unwrap()
             .ct_eq(&xsk_5h_7)

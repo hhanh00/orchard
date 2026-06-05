@@ -14,7 +14,7 @@ use super::{Action, Bundle, Output, Spend, Zip32Derivation};
 use crate::{
     bundle::Flags,
     keys::{FullViewingKey, SpendingKey},
-    note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext},
+    note::{AssetBase, ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
     primitives::redpallas::{self, SpendAuth},
     tree::{MerkleHashOrchard, MerklePath},
     value::{NoteValue, Sign, ValueCommitTrapdoor, ValueCommitment, ValueSum},
@@ -31,6 +31,7 @@ impl Bundle {
         anchor: [u8; 32],
         zkproof: Option<Vec<u8>>,
         bsk: Option<[u8; 32]>,
+        burn: Vec<([u8; 32], u64)>,
     ) -> Result<Self, ParseError> {
         let flags = Flags::from_byte(flags).ok_or(ParseError::UnexpectedFlagBitsSet)?;
 
@@ -57,6 +58,16 @@ impl Bundle {
             .transpose()
             .map_err(|_| ParseError::InvalidBindingSignatureSigningKey)?;
 
+        let burn = burn
+            .into_iter()
+            .map(|(asset_bytes, value)| {
+                let asset = AssetBase::from_bytes(&asset_bytes)
+                    .into_option()
+                    .ok_or(ParseError::InvalidAssetBase)?;
+                Ok((asset, NoteValue::from_raw(value)))
+            })
+            .collect::<Result<_, ParseError>>()?;
+
         Ok(Self {
             actions,
             flags,
@@ -64,6 +75,7 @@ impl Bundle {
             anchor,
             zkproof,
             bsk,
+            burn,
         })
     }
 }
@@ -106,8 +118,11 @@ impl Spend {
         spend_auth_sig: Option<[u8; 64]>,
         recipient: Option<[u8; 43]>,
         value: Option<u64>,
+        asset: Option<[u8; 32]>,
         rho: Option<[u8; 32]>,
         rseed: Option<[u8; 32]>,
+        rseed_split_note: Option<[u8; 32]>,
+        split_flag: bool,
         fvk: Option<[u8; 96]>,
         witness: Option<(u32, [[u8; 32]; NOTE_COMMITMENT_TREE_DEPTH])>,
         alpha: Option<[u8; 32]>,
@@ -135,6 +150,10 @@ impl Spend {
 
         let value = value.map(NoteValue::from_raw);
 
+        let asset = asset
+            .map(|a| AssetBase::from_bytes(&a).into_option().ok_or(ParseError::InvalidAssetBase))
+            .transpose()?;
+
         let rho = rho
             .map(|rho| {
                 Rho::from_bytes(&rho)
@@ -147,6 +166,15 @@ impl Spend {
             .map(|rseed| {
                 let rho = rho.as_ref().ok_or(ParseError::MissingRho)?;
                 RandomSeed::from_bytes(rseed, rho)
+                    .into_option()
+                    .ok_or(ParseError::InvalidRandomSeed)
+            })
+            .transpose()?;
+
+        let rseed_split_note = rseed_split_note
+            .map(|rsn| {
+                let rho = rho.as_ref().ok_or(ParseError::MissingRho)?;
+                RandomSeed::from_bytes(rsn, rho)
                     .into_option()
                     .ok_or(ParseError::InvalidRandomSeed)
             })
@@ -193,8 +221,11 @@ impl Spend {
             spend_auth_sig,
             recipient,
             value,
+            asset,
             rho,
             rseed,
+            rseed_split_note,
+            split_flag,
             fvk,
             witness,
             alpha,
@@ -215,6 +246,7 @@ impl Output {
         ephemeral_key: [u8; 32],
         enc_ciphertext: Vec<u8>,
         out_ciphertext: Vec<u8>,
+        asset: [u8; 32],
         recipient: Option<[u8; 43]>,
         value: Option<u64>,
         rseed: Option<[u8; 32]>,
@@ -227,17 +259,14 @@ impl Output {
             .into_option()
             .ok_or(ParseError::InvalidExtractedNoteCommitment)?;
 
-        let encrypted_note = TransmittedNoteCiphertext {
-            epk_bytes: ephemeral_key,
-            enc_ciphertext: enc_ciphertext
-                .as_slice()
-                .try_into()
-                .map_err(|_| ParseError::InvalidEncCiphertext)?,
-            out_ciphertext: out_ciphertext
-                .as_slice()
-                .try_into()
-                .map_err(|_| ParseError::InvalidOutCiphertext)?,
-        };
+        let out_ciphertext: [u8; 80] = out_ciphertext
+            .as_slice()
+            .try_into()
+            .map_err(|_| ParseError::InvalidOutCiphertext)?;
+
+        let asset = AssetBase::from_bytes(&asset)
+            .into_option()
+            .ok_or(ParseError::InvalidAssetBase)?;
 
         let recipient = recipient
             .as_ref()
@@ -263,7 +292,10 @@ impl Output {
 
         Ok(Self {
             cmx,
-            encrypted_note,
+            ephemeral_key,
+            enc_ciphertext,
+            out_ciphertext,
+            asset,
             recipient,
             value,
             rseed,
@@ -300,6 +332,8 @@ impl Zip32Derivation {
 pub enum ParseError {
     /// An invalid anchor was provided.
     InvalidAnchor,
+    /// An invalid asset base was provided.
+    InvalidAssetBase,
     /// An invalid `bsk` was provided.
     InvalidBindingSignatureSigningKey,
     /// An invalid `dummy_sk` was provided.
@@ -342,6 +376,7 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ParseError::InvalidAnchor => write!(f, "invalid anchor"),
+            ParseError::InvalidAssetBase => write!(f, "invalid asset base"),
             ParseError::InvalidBindingSignatureSigningKey => write!(f, "invalid `bsk`"),
             ParseError::InvalidDummySpendingKey => write!(f, "invalid `dummy_sk`"),
             ParseError::InvalidEncCiphertext => write!(f, "invalid `enc_ciphertext`"),
