@@ -8,7 +8,7 @@ use group::ff::PrimeField;
 use zcash_note_encryption::{
     note_bytes::NoteBytesData,
     BatchDomain, Domain, EphemeralKeyBytes, OutPlaintextBytes,
-    OutgoingCipherKey, ShieldedOutput, AEAD_TAG_SIZE, COMPACT_NOTE_SIZE, ENC_CIPHERTEXT_SIZE,
+    OutgoingCipherKey, ShieldedOutput, AEAD_TAG_SIZE, COMPACT_NOTE_SIZE,
     NOTE_PLAINTEXT_SIZE, OUT_PLAINTEXT_SIZE,
 };
 
