@@ -8,13 +8,9 @@ use crate::constants::{OrchardCommitDomains, OrchardFixedBases, OrchardHashDomai
 use crate::note::AssetBase;
 use halo2_gadgets::{
     ecc::{
-        chip::EccChip, CircuitVersion, EccInstructions, FixedPoint, FixedPointBaseField,
-        FixedPointShort, Point, ScalarFixed, ScalarFixedShort, X,
+        chip::EccChip, CircuitVersion,
     },
-    poseidon::{
-        primitives::{self as poseidon, ConstantLength},
-        Hash as PoseidonHash, PoseidonSpongeInstructions, Pow5Chip as PoseidonChip,
-    },
+    poseidon::Pow5Chip as PoseidonChip,
     sinsemilla::{chip::SinsemillaChip, merkle::chip::MerkleChip},
     utilities::{cond_swap::CondSwapChip, lookup_range_check::PallasLookupRangeCheck},
 };

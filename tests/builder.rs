@@ -5,10 +5,10 @@ use orchard::{
     builder::{Builder, BundleType},
     bundle::{Authorized, Flags},
     circuit::{ProvingKey, VerifyingKey},
-    flavor::{OrchardFlavor, OrchardVanilla, OrchardZSA},
+    flavor::{NoteFlavor, NormalFlavor, OrchardFlavor, ZsaFlavor},
     keys::{FullViewingKey, PreparedIncomingViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
     note::{AssetBase, ExtractedNoteCommitment},
-    primitives::{OrchardDomain, OrchardPrimitives},
+    primitives::OrchardDomain,
     sighash_kind::OrchardSighashKind,
     tree::{MerkleHashOrchard, MerklePath},
     value::NoteValue,
@@ -19,7 +19,7 @@ use rand::SeedableRng;
 use shardtree::{store::memory::MemoryShardStore, ShardTree};
 use zcash_note_encryption::try_note_decryption;
 
-pub fn verify_bundle<Pr: OrchardPrimitives>(
+pub fn verify_bundle<Pr: NoteFlavor>(
     bundle: &Bundle<Authorized, i64, Pr>,
     vk: &VerifyingKey,
     verify_proof: bool,
@@ -70,22 +70,22 @@ pub fn build_merkle_path(note: &Note) -> (MerklePath, Anchor) {
     (merkle_path.into(), root.into())
 }
 
-trait BundleOrchardFlavor: OrchardFlavor {
+trait BundleNoteFlavor: OrchardFlavor {
     const DEFAULT_BUNDLE_TYPE: BundleType;
     const SPENDS_DISABLED_FLAGS: Flags;
 }
 
-impl BundleOrchardFlavor for OrchardVanilla {
+impl BundleNoteFlavor for NormalFlavor {
     const DEFAULT_BUNDLE_TYPE: BundleType = BundleType::DEFAULT;
     const SPENDS_DISABLED_FLAGS: Flags = Flags::SPENDS_DISABLED;
 }
 
-impl BundleOrchardFlavor for OrchardZSA {
+impl BundleNoteFlavor for ZsaFlavor {
     const DEFAULT_BUNDLE_TYPE: BundleType = BundleType::DEFAULT_ZSA;
     const SPENDS_DISABLED_FLAGS: Flags = Flags::SPENDS_DISABLED_WITH_ZSA;
 }
 
-fn bundle_chain<FL: BundleOrchardFlavor>() -> ([u8; 32], [u8; 32]) {
+fn bundle_chain<FL: BundleNoteFlavor>() -> ([u8; 32], [u8; 32]) {
     let mut rng = StdRng::seed_from_u64(1u64);
     let pk = ProvingKey::build::<FL>();
     let vk = VerifyingKey::build::<FL>();
@@ -164,7 +164,7 @@ fn bundle_chain<FL: BundleOrchardFlavor>() -> ([u8; 32], [u8; 32]) {
         let mut builder = Builder::new(
             BundleType::Transactional {
                 // Intentionally testing with SPENDS_DISABLED as SPENDS_DISABLED_WITH_ZSA is already
-                // tested above (for OrchardZSA case). Both should work.
+                // tested above (for ZsaFlavor case). Both should work.
                 flags: Flags::SPENDS_DISABLED,
                 bundle_required: false,
             },
@@ -208,10 +208,10 @@ fn bundle_chain<FL: BundleOrchardFlavor>() -> ([u8; 32], [u8; 32]) {
 
 #[test]
 fn bundle_chain_vanilla() {
-    let (orchard_digest_1, orchard_digest_2) = bundle_chain::<OrchardVanilla>();
+    let (orchard_digest_1, orchard_digest_2) = bundle_chain::<NormalFlavor>();
     assert_eq!(
         orchard_digest_1,
-        // Locks the `orchard_digest` for OrchardVanilla
+        // Locks the `orchard_digest` for NormalFlavor
         [
             165, 242, 106, 135, 168, 224, 110, 252, 175, 110, 63, 29, 78, 243, 33, 14, 152, 202,
             209, 47, 68, 32, 138, 96, 79, 213, 218, 93, 45, 87, 221, 174
@@ -219,7 +219,7 @@ fn bundle_chain_vanilla() {
     );
     assert_eq!(
         orchard_digest_2,
-        // Locks the `orchard_digest` for OrchardVanilla
+        // Locks the `orchard_digest` for NormalFlavor
         [
             74, 174, 42, 41, 68, 92, 171, 110, 10, 148, 217, 61, 68, 50, 49, 1, 1, 180, 221, 210,
             97, 237, 25, 198, 195, 77, 19, 160, 186, 172, 8, 26
@@ -229,10 +229,10 @@ fn bundle_chain_vanilla() {
 
 #[test]
 fn bundle_chain_zsa() {
-    let (orchard_digest_1, orchard_digest_2) = bundle_chain::<OrchardZSA>();
+    let (orchard_digest_1, orchard_digest_2) = bundle_chain::<ZsaFlavor>();
     assert_eq!(
         orchard_digest_1,
-        // Locks the `orchard_digest` for OrchardZSA
+        // Locks the `orchard_digest` for ZsaFlavor
         [
             176, 24, 152, 89, 60, 222, 215, 240, 176, 197, 147, 81, 4, 84, 61, 189, 163, 117, 43,
             201, 63, 140, 116, 211, 133, 186, 54, 58, 171, 124, 192, 215
@@ -240,7 +240,7 @@ fn bundle_chain_zsa() {
     );
     assert_eq!(
         orchard_digest_2,
-        // Locks the `orchard_digest` for OrchardZSA
+        // Locks the `orchard_digest` for ZsaFlavor
         [
             161, 158, 107, 122, 89, 77, 236, 178, 130, 85, 148, 101, 237, 1, 67, 119, 76, 126, 233,
             123, 94, 240, 183, 227, 9, 245, 74, 51, 16, 12, 157, 60

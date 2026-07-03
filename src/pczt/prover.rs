@@ -8,7 +8,7 @@ use rand::{CryptoRng, RngCore};
 use crate::{
     builder::SpendInfo,
     circuit::{Circuit, Instance, ProvingKey, Witnesses},
-    flavor::{OrchardVanilla, OrchardZSA},
+    flavor::{NormalFlavor, ZsaFlavor},
     note::Rho,
     Note, Proof,
 };
@@ -103,7 +103,7 @@ impl super::Bundle {
                     .clone()
                     .ok_or(ProverError::MissingValueCommitTrapdoor)?;
 
-                Witnesses::from_action_context::<OrchardZSA>(spend, output_note, alpha, rcv)
+                Witnesses::from_action_context::<ZsaFlavor>(spend, output_note, alpha, rcv)
                     .ok_or(ProverError::RhoMismatch)
             })
             .collect::<Result<Vec<_>, ProverError>>()?;
@@ -125,10 +125,10 @@ impl super::Bundle {
             .collect::<Result<Vec<_>, ProverError>>()?;
 
         let proof = if is_zsa {
-            let circuits: Vec<_> = witnesses.into_iter().map(|w| Circuit::<OrchardZSA> { witnesses: w, phantom: core::marker::PhantomData }).collect();
+            let circuits: Vec<_> = witnesses.into_iter().map(|w| Circuit::<ZsaFlavor> { witnesses: w, phantom: core::marker::PhantomData }).collect();
             Proof::create(pk, &circuits, &instances, rng).map_err(ProverError::ProofFailed)?
         } else {
-            let circuits: Vec<_> = witnesses.into_iter().map(|w| Circuit::<OrchardVanilla> { witnesses: w, phantom: core::marker::PhantomData }).collect();
+            let circuits: Vec<_> = witnesses.into_iter().map(|w| Circuit::<NormalFlavor> { witnesses: w, phantom: core::marker::PhantomData }).collect();
             Proof::create(pk, &circuits, &instances, rng).map_err(ProverError::ProofFailed)?
         };
 

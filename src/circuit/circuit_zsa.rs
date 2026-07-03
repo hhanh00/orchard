@@ -41,11 +41,11 @@ use crate::{
         ENABLE_OUTPUT, ENABLE_SPEND, ENABLE_ZSA, NF_OLD, RK_X, RK_Y,
     },
     constants::{OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains},
-    flavor::OrchardZSA,
+    flavor::ZsaFlavor,
     note::AssetBase,
 };
 
-impl OrchardCircuit for OrchardZSA {
+impl OrchardCircuit for ZsaFlavor {
     type Config = Config<PallasLookupRangeCheck4_5BConfig>;
 
     fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
@@ -63,10 +63,10 @@ impl OrchardCircuit for OrchardZSA {
             meta.advice_column(),
         ];
 
-        // The new or updated constraints for OrchardZSA are explained in
+        // The new or updated constraints for ZsaFlavor are explained in
         // [ZIP-226: Transfer and Burn of Zcash Shielded Assets][circuitstatement].
         //
-        // All OrchardZSA constraints:
+        // All ZsaFlavor constraints:
         // Constrain split_flag to be boolean
         // Constrain v_old * (1 - split_flag) - v_new = magnitude * sign
         // Constrain (v_old = 0 and is_zatoshi_asset = 1) or (calculated root = anchor)
@@ -883,7 +883,7 @@ mod tests {
             AdditionalZsaWitnesses, Circuit, Instance, Proof, ProvingKey, VerifyingKey, Witnesses,
             K,
         },
-        flavor::OrchardZSA,
+        flavor::ZsaFlavor,
         keys::{FullViewingKey, Scope, SpendValidatingKey, SpendingKey},
         note::{commitment::NoteCommitTrapdoor, AssetBase, Note, NoteCommitment, Nullifier, Rho},
         primitives::redpallas::VerificationKey,
@@ -891,7 +891,7 @@ mod tests {
         value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
     };
 
-    fn generate_dummy_circuit_instance<R: RngCore>(mut rng: R) -> (Circuit<OrchardZSA>, Instance) {
+    fn generate_dummy_circuit_instance<R: RngCore>(mut rng: R) -> (Circuit<ZsaFlavor>, Instance) {
         let (_, fvk, spent_note) = Note::dummy(&mut rng, None);
 
         let sender_address = spent_note.recipient();
@@ -968,7 +968,7 @@ mod tests {
             .map(|()| generate_dummy_circuit_instance(&mut rng))
             .unzip();
 
-        let vk = VerifyingKey::build::<OrchardZSA>();
+        let vk = VerifyingKey::build::<ZsaFlavor>();
 
         // Test that the pinned verification key (representing the circuit)
         // is as expected.
@@ -1008,7 +1008,7 @@ mod tests {
             );
         }
 
-        let pk = ProvingKey::build::<OrchardZSA>();
+        let pk = ProvingKey::build::<ZsaFlavor>();
         let proof = Proof::create(&pk, &circuits, &instances, &mut rng).unwrap();
         assert!(proof.verify(&vk, &instances).is_ok());
         assert_eq!(proof.0.len(), expected_proof_size);
@@ -1019,7 +1019,7 @@ mod tests {
         use std::fs;
         use std::io::{Read, Write};
 
-        let vk = VerifyingKey::build::<OrchardZSA>();
+        let vk = VerifyingKey::build::<ZsaFlavor>();
 
         fn write_test_case<W: Write>(
             mut w: W,
@@ -1089,7 +1089,7 @@ mod tests {
                 let (circuit, instance) = generate_dummy_circuit_instance(OsRng);
                 let instances = &[instance.clone()];
 
-                let pk = ProvingKey::build::<OrchardZSA>();
+                let pk = ProvingKey::build::<ZsaFlavor>();
                 let proof = Proof::create(&pk, &[circuit], instances, &mut rng).unwrap();
                 assert!(proof.verify(&vk, instances).is_ok());
 
@@ -1120,7 +1120,7 @@ mod tests {
             .titled("Orchard Action Circuit", ("sans-serif", 60))
             .unwrap();
 
-        let circuit = Circuit::<OrchardZSA> {
+        let circuit = Circuit::<ZsaFlavor> {
             witnesses: Witnesses::default(),
             phantom: core::marker::PhantomData,
         };
@@ -1132,7 +1132,7 @@ mod tests {
     }
 
     fn check_proof_of_orchard_circuit(
-        circuit: &Circuit<OrchardZSA>,
+        circuit: &Circuit<ZsaFlavor>,
         instance: &Instance,
         should_pass: bool,
     ) {
@@ -1158,7 +1158,7 @@ mod tests {
         is_zatoshi_asset: bool,
         split_flag: bool,
         mut rng: R,
-    ) -> (Circuit<OrchardZSA>, Instance) {
+    ) -> (Circuit<ZsaFlavor>, Instance) {
         // We cannot create a split note with a zatoshi asset.
         assert!(!(is_zatoshi_asset && split_flag));
 
@@ -1242,7 +1242,7 @@ mod tests {
 
         (
             Circuit {
-                witnesses: Witnesses::from_action_context_unchecked::<OrchardZSA>(
+                witnesses: Witnesses::from_action_context_unchecked::<ZsaFlavor>(
                     spend_info,
                     output_note,
                     alpha,

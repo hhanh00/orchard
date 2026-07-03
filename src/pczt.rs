@@ -12,11 +12,11 @@ use zip32::ChildIndex;
 
 use crate::{
     bundle::Flags,
+    flavor::NoteFlavor,
     keys::{FullViewingKey, SpendingKey},
     note::{AssetBase, ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
     primitives::{
         redpallas::{self, Binding, SpendAuth},
-        OrchardPrimitives,
     },
     tree::MerklePath,
     value::{NoteValue, ValueCommitTrapdoor, ValueCommitment, ValueSum},
@@ -342,7 +342,7 @@ impl Output {
     /// for the given flavor.
     ///
     /// [`TransmittedNoteCiphertext`]: crate::note::TransmittedNoteCiphertext
-    pub fn encrypted_note<Pr: OrchardPrimitives>(
+    pub fn encrypted_note<Pr: NoteFlavor>(
         &self,
     ) -> Option<crate::note::TransmittedNoteCiphertext<Pr>> {
         Some(crate::note::TransmittedNoteCiphertext {
@@ -405,7 +405,7 @@ mod tests {
         builder::{Builder, BundleType},
         circuit::ProvingKey,
         constants::MERKLE_DEPTH_ORCHARD,
-        flavor::{OrchardVanilla, OrchardZSA},
+        flavor::{NormalFlavor, ZsaFlavor},
         keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
         note::{AssetBase, ExtractedNoteCommitment, RandomSeed, Rho},
         pczt::{ProverError, TxExtractorError, Zip32Derivation},
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn shielding_bundle() {
-        let pk = ProvingKey::build::<OrchardVanilla>();
+        let pk = ProvingKey::build::<NormalFlavor>();
         let mut rng = OsRng;
 
         let sk = SpendingKey::random(&mut rng);
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn shielded_bundle() {
-        let pk = ProvingKey::build::<OrchardVanilla>();
+        let pk = ProvingKey::build::<NormalFlavor>();
         let mut rng = OsRng;
 
         // Pretend we derived the spending key via ZIP 32.
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn create_proof_rejects_identity_rk() {
-        let pk = ProvingKey::build::<OrchardVanilla>();
+        let pk = ProvingKey::build::<NormalFlavor>();
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn extract_rejects_identity_rk() {
-        let pk = ProvingKey::build::<OrchardVanilla>();
+        let pk = ProvingKey::build::<NormalFlavor>();
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
@@ -664,10 +664,10 @@ mod tests {
         // ZSA bundle → ZSA-sized ciphertexts even for zatoshi outputs
         assert_eq!(action.output().enc_ciphertext().len(), 612);
 
-        // encrypted_note::<OrchardZSA>() should succeed (612 bytes)
-        assert!(action.output().encrypted_note::<OrchardZSA>().is_some());
-        // encrypted_note::<OrchardVanilla>() should fail (wrong size: 612 != 580)
-        assert!(action.output().encrypted_note::<OrchardVanilla>().is_none());
+        // encrypted_note::<ZsaFlavor>() should succeed (612 bytes)
+        assert!(action.output().encrypted_note::<ZsaFlavor>().is_some());
+        // encrypted_note::<NormalFlavor>() should fail (wrong size: 612 != 580)
+        assert!(action.output().encrypted_note::<NormalFlavor>().is_none());
     }
 
     /// Verify that AssetBase::random produces a different point from zatoshi.
@@ -681,7 +681,7 @@ mod tests {
     /// Full ZSA PCZT pipeline with a non-zatoshi asset spend.
     #[test]
     fn zsa_shielded_bundle() {
-        let pk = ProvingKey::build::<OrchardZSA>();
+        let pk = ProvingKey::build::<ZsaFlavor>();
         let mut rng = OsRng;
 
         let sk = SpendingKey::random(&mut rng);
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn extract_rejects_non_canonical_proof() {
-        let pk = ProvingKey::build::<OrchardVanilla>();
+        let pk = ProvingKey::build::<NormalFlavor>();
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);

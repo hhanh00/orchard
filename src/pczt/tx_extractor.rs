@@ -6,8 +6,8 @@ use rand::{CryptoRng, RngCore};
 use super::Action;
 use crate::{
     bundle::{Authorization, Authorized, EffectsOnly},
-    flavor::{OrchardVanilla, OrchardZSA},
-    primitives::{redpallas::{self, Binding, SpendAuth}, OrchardPrimitives},
+    flavor::{NoteFlavor, NormalFlavor, ZsaFlavor},
+    primitives::{redpallas::{self, Binding, SpendAuth}},
     sighash_kind::{OrchardBindingSig, OrchardSighashKind, OrchardSpendAuthSig},
     Proof,
 };
@@ -20,7 +20,7 @@ impl super::Bundle {
     /// [regular `Bundle`]: crate::Bundle
     pub fn extract_effects<V: TryFrom<i64>>(
         &self,
-    ) -> Result<Option<crate::Bundle<EffectsOnly, V, OrchardVanilla>>, TxExtractorError> {
+    ) -> Result<Option<crate::Bundle<EffectsOnly, V, NormalFlavor>>, TxExtractorError> {
         self.to_tx_data(|_| Ok(()), |_| Ok(EffectsOnly))
     }
 
@@ -32,7 +32,7 @@ impl super::Bundle {
     /// [regular `Bundle`]: crate::Bundle
     pub fn extract_effects_zsa<V: TryFrom<i64>>(
         &self,
-    ) -> Result<Option<crate::Bundle<EffectsOnly, V, OrchardZSA>>, TxExtractorError> {
+    ) -> Result<Option<crate::Bundle<EffectsOnly, V, ZsaFlavor>>, TxExtractorError> {
         self.to_tx_data(|_| Ok(()), |_| Ok(EffectsOnly))
     }
 
@@ -43,7 +43,7 @@ impl super::Bundle {
     /// [regular `Bundle`]: crate::Bundle
     pub fn extract<V: TryFrom<i64>>(
         &self,
-    ) -> Result<Option<crate::Bundle<Unbound, V, OrchardVanilla>>, TxExtractorError> {
+    ) -> Result<Option<crate::Bundle<Unbound, V, NormalFlavor>>, TxExtractorError> {
         let bundle = self.to_tx_data(
             |action| {
                 action
@@ -84,7 +84,7 @@ impl super::Bundle {
     /// [regular `Bundle`]: crate::Bundle
     pub fn extract_zsa<V: TryFrom<i64>>(
         &self,
-    ) -> Result<Option<crate::Bundle<Unbound, V, OrchardZSA>>, TxExtractorError> {
+    ) -> Result<Option<crate::Bundle<Unbound, V, ZsaFlavor>>, TxExtractorError> {
         self.to_tx_data(
             |action| {
                 action
@@ -116,7 +116,7 @@ impl super::Bundle {
     ) -> Result<Option<crate::Bundle<A, V, Pr>>, E>
     where
         A: Authorization,
-        Pr: OrchardPrimitives,
+        Pr: NoteFlavor,
         E: From<TxExtractorError>,
         F: Fn(&Action) -> Result<<A as Authorization>::SpendAuth, E>,
         G: FnOnce(&Self) -> Result<A, E>,
@@ -263,7 +263,7 @@ impl Authorization for Unbound {
     type SpendAuth = redpallas::Signature<SpendAuth>;
 }
 
-impl<V> crate::Bundle<Unbound, V, OrchardVanilla> {
+impl<V> crate::Bundle<Unbound, V, NormalFlavor> {
     /// Verifies the given sighash with every `spend_auth_sig`, and then binds the bundle.
     ///
     /// Returns `None` if the given sighash does not validate against every `spend_auth_sig`.
@@ -271,7 +271,7 @@ impl<V> crate::Bundle<Unbound, V, OrchardVanilla> {
         self,
         sighash: [u8; 32],
         rng: R,
-    ) -> Option<crate::Bundle<Authorized, V, OrchardVanilla>> {
+    ) -> Option<crate::Bundle<Authorized, V, NormalFlavor>> {
         if self
             .actions()
             .iter()
@@ -296,7 +296,7 @@ impl<V> crate::Bundle<Unbound, V, OrchardVanilla> {
     }
 }
 
-impl<V> crate::Bundle<Unbound, V, OrchardZSA> {
+impl<V> crate::Bundle<Unbound, V, ZsaFlavor> {
     /// Verifies the given sighash with every `spend_auth_sig`, and then binds the ZSA bundle.
     ///
     /// Returns `None` if the given sighash does not validate against every `spend_auth_sig`.
@@ -304,7 +304,7 @@ impl<V> crate::Bundle<Unbound, V, OrchardZSA> {
         self,
         sighash: [u8; 32],
         rng: R,
-    ) -> Option<crate::Bundle<Authorized, V, OrchardZSA>> {
+    ) -> Option<crate::Bundle<Authorized, V, ZsaFlavor>> {
         if self
             .actions()
             .iter()

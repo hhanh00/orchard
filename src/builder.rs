@@ -14,14 +14,14 @@ use zcash_note_encryption::NoteEncryption;
 use crate::{
     address::Address,
     bundle::{burn_validation::BurnError, Authorization, Authorized, Bundle, Flags},
-    flavor::{OrchardVanilla, OrchardZSA},
+    flavor::{NoteFlavor, NormalFlavor, ZsaFlavor},
     keys::{
         FullViewingKey, OutgoingViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey,
         SpendingKey,
     },
     note::{AssetBase, ExtractedNoteCommitment, Note, Nullifier, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, Binding, SpendAuth},
-    primitives::{OrchardDomain, OrchardPrimitives},
+    primitives::OrchardDomain,
     sighash_kind::{OrchardBindingSig, OrchardSighashKind, OrchardSpendAuthSig},
     tree::{Anchor, MerklePath},
     value::{self, BalanceError, NoteValue, ValueCommitTrapdoor, ValueCommitment, ValueSum},
@@ -414,7 +414,7 @@ impl OutputInfo {
     /// Defined in [Zcash Protocol Spec § 4.7.3: Sending Notes (Orchard)][orchardsend].
     ///
     /// [orchardsend]: https://zips.z.cash/protocol/nu5.pdf#orchardsend
-    fn build<Pr: OrchardPrimitives>(
+    fn build<Pr: NoteFlavor>(
         &self,
         cv_net: &ValueCommitment,
         nf_old: Nullifier,
@@ -449,9 +449,9 @@ impl OutputInfo {
         // have consistent 612-byte ciphertexts, including padding dummies.
         let is_zsa = flags.zsa_enabled() || !bool::from(asset.is_zatoshi());
         let (note, cmx, ephemeral_key, enc_ciphertext, out_ciphertext) = if is_zsa {
-            Self::build_output_pczt::<OrchardZSA>(&self, cv_net, nf_old, &mut rng)
+            Self::build_output_pczt::<ZsaFlavor>(&self, cv_net, nf_old, &mut rng)
         } else {
-            Self::build_output_pczt::<OrchardVanilla>(&self, cv_net, nf_old, &mut rng)
+            Self::build_output_pczt::<NormalFlavor>(&self, cv_net, nf_old, &mut rng)
         };
 
         crate::pczt::Output {
@@ -470,7 +470,7 @@ impl OutputInfo {
         }
     }
 
-    fn build_output_pczt<Pr: OrchardPrimitives>(
+    fn build_output_pczt<Pr: NoteFlavor>(
         &self,
         cv_net: &ValueCommitment,
         nf_old: Nullifier,
@@ -1282,7 +1282,7 @@ impl MaybeSigned {
     }
 }
 
-impl<P: fmt::Debug, V, Pr: OrchardPrimitives> Bundle<InProgress<P, Unauthorized>, V, Pr> {
+impl<P: fmt::Debug, V, Pr: NoteFlavor> Bundle<InProgress<P, Unauthorized>, V, Pr> {
     /// Loads the sighash into this bundle, preparing it for signing.
     ///
     /// This API ensures that all signatures are created over the same sighash.
@@ -1320,7 +1320,7 @@ impl<P: fmt::Debug, V, Pr: OrchardPrimitives> Bundle<InProgress<P, Unauthorized>
     }
 }
 
-impl<V, Pr: OrchardPrimitives> Bundle<InProgress<Proof, Unauthorized>, V, Pr> {
+impl<V, Pr: NoteFlavor> Bundle<InProgress<Proof, Unauthorized>, V, Pr> {
     /// Applies signatures to this bundle, in order to authorize it.
     ///
     /// This is a helper method that wraps [`Bundle::prepare`], [`Bundle::sign`], and
@@ -1340,7 +1340,7 @@ impl<V, Pr: OrchardPrimitives> Bundle<InProgress<Proof, Unauthorized>, V, Pr> {
     }
 }
 
-impl<P: fmt::Debug, V, Pr: OrchardPrimitives> Bundle<InProgress<P, PartiallyAuthorized>, V, Pr> {
+impl<P: fmt::Debug, V, Pr: NoteFlavor> Bundle<InProgress<P, PartiallyAuthorized>, V, Pr> {
     /// Signs this bundle with the given [`SpendAuthorizingKey`].
     ///
     /// This will apply signatures for all notes controlled by this spending key.
@@ -1405,7 +1405,7 @@ impl<P: fmt::Debug, V, Pr: OrchardPrimitives> Bundle<InProgress<P, PartiallyAuth
     }
 }
 
-impl<V, Pr: OrchardPrimitives> Bundle<InProgress<Proof, PartiallyAuthorized>, V, Pr> {
+impl<V, Pr: NoteFlavor> Bundle<InProgress<Proof, PartiallyAuthorized>, V, Pr> {
     /// Finalizes this bundle, enabling it to be included in a transaction.
     ///
     /// Returns an error if any signatures are missing.
@@ -1476,7 +1476,7 @@ pub mod testing {
         flavor::OrchardFlavor,
         keys::{testing::arb_spending_key, FullViewingKey, SpendAuthorizingKey, SpendingKey},
         note::{testing::arb_note, AssetBase},
-        primitives::OrchardPrimitives,
+        flavor::NoteFlavor,
         tree::{Anchor, MerkleHashOrchard, MerklePath},
         value::{testing::arb_positive_note_value, NoteValue, MAX_NOTE_VALUE},
         Address, Note,
@@ -1540,7 +1540,7 @@ pub mod testing {
     /// `BuilderArb` adapts `arb_...` functions for both Vanilla and ZSA Orchard protocol variations
     /// in property-based testing, addressing proptest crate limitations.
     #[derive(Debug)]
-    pub struct BuilderArb<Pr: OrchardPrimitives> {
+    pub struct BuilderArb<Pr: NoteFlavor> {
         phantom: core::marker::PhantomData<Pr>,
     }
 
@@ -1622,7 +1622,7 @@ mod tests {
         bundle::{Authorized, Bundle},
         circuit::ProvingKey,
         constants::MERKLE_DEPTH_ORCHARD,
-        flavor::{OrchardFlavor, OrchardVanilla, OrchardZSA},
+        flavor::{OrchardFlavor, NormalFlavor, ZsaFlavor},
         keys::{FullViewingKey, Scope, SpendingKey},
         note::AssetBase,
         tree::EMPTY_ROOTS,
@@ -1666,16 +1666,16 @@ mod tests {
 
     #[test]
     fn shielding_bundle_vanilla() {
-        shielding_bundle::<OrchardVanilla>(BundleType::DEFAULT)
+        shielding_bundle::<NormalFlavor>(BundleType::DEFAULT)
     }
 
     #[test]
     fn shielding_bundle_zsa() {
-        shielding_bundle::<OrchardZSA>(BundleType::DEFAULT_ZSA)
+        shielding_bundle::<ZsaFlavor>(BundleType::DEFAULT_ZSA)
     }
 
     #[test]
     fn shielding_bundle_zsa_with_vanilla_flags() {
-        shielding_bundle::<OrchardZSA>(BundleType::DEFAULT)
+        shielding_bundle::<ZsaFlavor>(BundleType::DEFAULT)
     }
 }

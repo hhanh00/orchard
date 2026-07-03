@@ -9,7 +9,7 @@ use orchard::{
     builder::{BuildError, Builder, BundleType},
     bundle::{burn_validation::BurnError, Authorized},
     circuit::{ProvingKey, VerifyingKey},
-    flavor::OrchardZSA,
+    flavor::ZsaFlavor,
     issuance::{
         auth::{IssueAuthKey, IssueValidatingKey, ZSASchnorr},
         compute_asset_desc_hash, verify_issue_bundle, AwaitingNullifier, IssueBundle, IssueInfo,
@@ -91,7 +91,7 @@ fn build_and_sign_bundle(
     mut rng: OsRng,
     pk: &ProvingKey,
     sk: &SpendingKey,
-) -> Bundle<Authorized, i64, OrchardZSA> {
+) -> Bundle<Authorized, i64, ZsaFlavor> {
     let unauthorized = builder.build(&mut rng).unwrap().unwrap().0;
     let sighash = unauthorized.commitment().into();
     let proven = unauthorized.create_proof(pk, &mut rng).unwrap();
@@ -203,7 +203,7 @@ fn issue_zsa_notes(
 fn create_zatoshi_note(keys: &Keychain) -> Note {
     let mut rng = OsRng;
 
-    let shielding_bundle: Bundle<_, i64, OrchardZSA> = {
+    let shielding_bundle: Bundle<_, i64, ZsaFlavor> = {
         // Use the empty tree.
         let anchor = MerkleHashOrchard::empty_root(32.into()).into();
 
@@ -262,7 +262,7 @@ fn build_and_verify_bundle(
     keys: &Keychain,
 ) -> Result<(), String> {
     let rng = OsRng;
-    let shielded_bundle: Bundle<_, i64, OrchardZSA> = {
+    let shielded_bundle: Bundle<_, i64, ZsaFlavor> = {
         let mut builder = Builder::new(BundleType::DEFAULT_ZSA, anchor);
 
         spends
@@ -297,7 +297,7 @@ fn build_and_verify_bundle(
     Ok(())
 }
 
-fn verify_unique_spent_nullifiers(bundle: &Bundle<Authorized, i64, OrchardZSA>) -> bool {
+fn verify_unique_spent_nullifiers(bundle: &Bundle<Authorized, i64, ZsaFlavor>) -> bool {
     let mut seen = HashSet::new();
     bundle
         .actions()
@@ -322,8 +322,8 @@ fn verify_reference_note(note: &Note, asset: AssetBase) {
 fn zsa_issue_and_transfer() {
     // --------------------------- Setup -----------------------------------------
 
-    let pk = ProvingKey::build::<OrchardZSA>();
-    let vk = VerifyingKey::build::<OrchardZSA>();
+    let pk = ProvingKey::build::<ZsaFlavor>();
+    let vk = VerifyingKey::build::<ZsaFlavor>();
 
     let keys = prepare_keys(&pk, &vk, 5);
     let keys2 = prepare_keys(&pk, &vk, 10);

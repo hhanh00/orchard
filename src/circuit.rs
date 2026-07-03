@@ -112,7 +112,7 @@ pub trait OrchardCircuit: Sized + Default {
     ) -> Result<(), plonk::Error>;
 
     /// Builds the ZSA-specific witnesses for the circuit.
-    /// For OrchardVanilla circuits, it should return `Value::unknown()`.
+    /// For NormalFlavor circuits, it should return `Value::unknown()`.
     fn build_additional_zsa_witnesses(
         psi_nf: pallas::Base,
         asset: AssetBase,
@@ -190,7 +190,7 @@ pub struct Witnesses {
     pub(crate) rcv: Value<ValueCommitTrapdoor>,
 
     // The ZSA-specific witnesses.
-    // For OrchardVanilla circuits, this field should be initialized to `Value::unknown()`.
+    // For NormalFlavor circuits, this field should be initialized to `Value::unknown()`.
     pub(crate) additional_zsa_witnesses: Value<AdditionalZsaWitnesses>,
 }
 
@@ -269,7 +269,7 @@ impl Witnesses {
 /// The verifying key for the Orchard Action circuit.
 ///
 /// In the current type system, this could be a verifying key for either
-/// the original Orchard Action circuit, or the OrchardZSA circuit.
+/// the original Orchard Action circuit, or the ZsaFlavor circuit.
 #[derive(Debug)]
 pub struct VerifyingKey {
     pub(crate) params: halo2_proofs::poly::commitment::Params<vesta::Affine>,
@@ -291,7 +291,7 @@ impl VerifyingKey {
 /// The proving key for the Orchard Action circuit.
 ///
 /// In the current type system, this could be a proving key for either
-/// the original Orchard Action circuit, or the OrchardZSA circuit.
+/// the original Orchard Action circuit, or the ZsaFlavor circuit.
 #[derive(Debug)]
 pub struct ProvingKey {
     params: halo2_proofs::poly::commitment::Params<vesta::Affine>,
@@ -513,14 +513,14 @@ mod tests {
 
     use super::{Circuit, Instance, Proof, ProvingKey, VerifyingKey, Witnesses, K};
     use crate::{
-        flavor::OrchardVanilla,
+        flavor::NormalFlavor,
         keys::SpendValidatingKey,
         note::{AssetBase, Note, Rho},
         tree::MerklePath,
         value::{ValueCommitTrapdoor, ValueCommitment},
     };
 
-    fn generate_circuit_instance<R: RngCore>(mut rng: R) -> (Circuit<OrchardVanilla>, Instance) {
+    fn generate_circuit_instance<R: RngCore>(mut rng: R) -> (Circuit<NormalFlavor>, Instance) {
         let (_, fvk, spent_note) = Note::dummy(&mut rng, None);
 
         let sender_address = spent_note.recipient();
@@ -590,7 +590,7 @@ mod tests {
             .map(|()| generate_circuit_instance(&mut rng))
             .unzip();
 
-        let vk = VerifyingKey::build::<OrchardVanilla>();
+        let vk = VerifyingKey::build::<NormalFlavor>();
 
         // Test that the pinned verification key (representing the circuit)
         // is as expected.
@@ -630,7 +630,7 @@ mod tests {
             );
         }
 
-        let pk = ProvingKey::build::<OrchardVanilla>();
+        let pk = ProvingKey::build::<NormalFlavor>();
         let proof = Proof::create(&pk, &circuits, &instances, &mut rng).unwrap();
         assert!(proof.verify(&vk, &instances).is_ok());
         assert_eq!(proof.0.len(), expected_proof_size);
@@ -640,7 +640,7 @@ mod tests {
     fn serialized_proof_test_case() {
         use std::io::{Read, Write};
 
-        let vk = VerifyingKey::build::<OrchardVanilla>();
+        let vk = VerifyingKey::build::<NormalFlavor>();
 
         fn write_test_case<W: Write>(
             mut w: W,
@@ -711,7 +711,7 @@ mod tests {
                 let (circuit, instance) = generate_circuit_instance(OsRng);
                 let instances = core::slice::from_ref(&instance);
 
-                let pk = ProvingKey::build::<OrchardVanilla>();
+                let pk = ProvingKey::build::<NormalFlavor>();
                 let proof = Proof::create(&pk, &[circuit], instances, &mut rng).unwrap();
                 assert!(proof.verify(&vk, instances).is_ok());
 
@@ -743,7 +743,7 @@ mod tests {
             .titled("Orchard Action Circuit", ("sans-serif", 60))
             .unwrap();
 
-        let circuit = Circuit::<OrchardVanilla> {
+        let circuit = Circuit::<NormalFlavor> {
             witnesses: Witnesses {
                 path: Value::unknown(),
                 pos: Value::unknown(),

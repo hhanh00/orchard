@@ -9,7 +9,7 @@ use subtle::CtOption;
 use crate::{
     note::{ExtractedNoteCommitment, Nullifier, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, SpendAuth},
-    primitives::OrchardPrimitives,
+    flavor::NoteFlavor,
     sighash_kind::OrchardSpendAuthSig,
     value::ValueCommitment,
 };
@@ -24,7 +24,7 @@ use crate::{
 /// Every `Action` has a non-identity `rk`, and an `epk_bytes` that encodes a
 /// non-identity [`pasta_curves::pallas::Point`].
 #[derive(Debug, Clone)]
-pub struct Action<A, Pr: OrchardPrimitives> {
+pub struct Action<A, Pr: NoteFlavor> {
     /// The nullifier of the note being spent.
     nf: Nullifier,
     /// The randomized verification key for the note being spent.
@@ -39,7 +39,7 @@ pub struct Action<A, Pr: OrchardPrimitives> {
     authorization: A,
 }
 
-impl<A, Pr: OrchardPrimitives> Action<A, Pr> {
+impl<A, Pr: NoteFlavor> Action<A, Pr> {
     /// Constructs an `Action` from its constituent parts.
     ///
     /// Returns an [`ActionFromPartsError`] if `rk` is the identity
@@ -173,7 +173,7 @@ impl fmt::Display for ActionFromPartsError {
 
 impl core::error::Error for ActionFromPartsError {}
 
-impl<Pr: OrchardPrimitives> DynamicUsage for Action<OrchardSpendAuthSig, Pr> {
+impl<Pr: NoteFlavor> DynamicUsage for Action<OrchardSpendAuthSig, Pr> {
     #[inline(always)]
     fn dynamic_usage(&self) -> usize {
         0
@@ -199,6 +199,7 @@ pub(crate) mod testing {
     use zcash_note_encryption::NoteEncryption;
 
     use crate::{
+    flavor::NoteFlavor,
         note::{
             commitment::ExtractedNoteCommitment, nullifier::testing::arb_nullifier,
             testing::arb_note, AssetBase, TransmittedNoteCiphertext,
@@ -207,9 +208,8 @@ pub(crate) mod testing {
             self,
             testing::{arb_spendauth_signing_key, arb_spendauth_verification_key},
         },
-        primitives::{OrchardDomain, OrchardPrimitives},
+        primitives::OrchardDomain,
         sighash_kind::{OrchardSighashKind, OrchardSpendAuthSig},
-        note_encryption::OrchardNoteEncryption,
         value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
         Note,
     };
@@ -219,11 +219,11 @@ pub(crate) mod testing {
     /// `ActionArb` adapts `arb_...` functions for both Vanilla and ZSA Orchard protocol flavors
     /// in property-based testing, addressing proptest crate limitations.
     #[derive(Debug)]
-    pub struct ActionArb<Pr: OrchardPrimitives> {
+    pub struct ActionArb<Pr: NoteFlavor> {
         phantom: core::marker::PhantomData<Pr>,
     }
 
-    impl<Pr: OrchardPrimitives> ActionArb<Pr> {
+    impl<Pr: NoteFlavor> ActionArb<Pr> {
         fn encrypt_note<R: RngCore>(
             note: Note,
             memo: Vec<u8>,
@@ -323,7 +323,7 @@ mod tests {
         note::{AssetBase, ExtractedNoteCommitment, Nullifier, TransmittedNoteCiphertext},
         primitives::redpallas::{self, SpendAuth},
         value::{ValueCommitTrapdoor, ValueCommitment, ValueSum},
-        flavor::OrchardVanilla,
+        flavor::NormalFlavor,
     };
     use zcash_note_encryption::note_bytes::NoteBytesData;
 
@@ -356,7 +356,7 @@ mod tests {
     fn dummy_other_fields() -> (
         Nullifier,
         ExtractedNoteCommitment,
-        TransmittedNoteCiphertext<OrchardVanilla>,
+        TransmittedNoteCiphertext<NormalFlavor>,
         ValueCommitment,
     ) {
         let nf = Nullifier::from_bytes(&[1u8; 32]).unwrap();

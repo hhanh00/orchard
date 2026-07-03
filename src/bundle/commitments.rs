@@ -5,7 +5,7 @@ use blake2b_simd::{Hash as Blake2bHash, Params, State};
 
 use crate::{
     bundle::{Authorization, Authorized, Bundle},
-    primitives::OrchardPrimitives,
+    flavor::{NoteFlavor, COMPACT_NOTE_SIZE_VANILLA, MEMO_SIZE},
     sighash_kind::OrchardSighashKind,
 };
 
@@ -42,20 +42,113 @@ pub(crate) fn hasher(personal: &[u8; 16]) -> State {
 
 /// Evaluate `orchard_digest` for the bundle as defined in
 /// [ZIP-244: Transaction Identifier Non-Malleability][zip244]
-/// for OrchardVanilla and as defined in
+/// for NormalFlavor and as defined in
 /// [ZIP-246: Digests for the Version 6 Transaction Format][zip246]
-/// for OrchardZSA
+/// for ZsaFlavor
 ///
 /// [zip244]: https://zips.z.cash/zip-0244
 /// [zip246]: https://zips.z.cash/zip-0246
 pub(crate) fn hash_bundle_txid_data<
     A: Authorization,
     V: Copy + Into<i64>,
-    Pr: OrchardPrimitives,
+    Pr: NoteFlavor,
 >(
     bundle: &Bundle<A, V, Pr>,
 ) -> Blake2bHash {
-    Pr::hash_bundle_txid_data(bundle)
+    if Pr::COMPACT_NOTE_SIZE > COMPACT_NOTE_SIZE_VANILLA {
+        hash_bundle_txid_data_v6(bundle)
+    } else {
+        hash_bundle_txid_data_v5(bundle)
+    }
+}
+
+fn hash_bundle_txid_data_v5<A: Authorization, V: Copy + Into<i64>, Pr: NoteFlavor>(
+    bundle: &Bundle<A, V, Pr>,
+) -> Blake2bHash {
+    let mut h = hasher(ZCASH_ORCHARD_HASH_PERSONALIZATION);
+
+    let mut ch = hasher(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION);
+    let mut mh = hasher(ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION);
+    let mut nh = hasher(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION);
+
+    for action in bundle.actions().iter() {
+        ch.update(&action.nullifier().to_bytes());
+        ch.update(&action.cmx().to_bytes());
+        ch.update(&action.encrypted_note().epk_bytes);
+        ch.update(&action.encrypted_note().enc_ciphertext.as_ref()[..Pr::COMPACT_NOTE_SIZE]);
+
+        mh.update(
+            &action.encrypted_note().enc_ciphertext.as_ref()
+                [Pr::COMPACT_NOTE_SIZE..Pr::COMPACT_NOTE_SIZE + MEMO_SIZE],
+        );
+
+        nh.update(&action.cv_net().to_bytes());
+        nh.update(&<[u8; 32]>::from(action.rk()));
+        nh.update(
+            &action.encrypted_note().enc_ciphertext.as_ref()
+                [Pr::COMPACT_NOTE_SIZE + MEMO_SIZE..],
+        );
+        nh.update(&action.encrypted_note().out_ciphertext);
+    }
+
+    h.update(ch.finalize().as_bytes());
+    h.update(mh.finalize().as_bytes());
+    h.update(nh.finalize().as_bytes());
+
+    h.update(&[bundle.flags().to_byte()]);
+    h.update(&(*bundle.value_balance()).into().to_le_bytes());
+    h.update(&bundle.anchor().to_bytes());
+    h.finalize()
+}
+
+fn hash_bundle_txid_data_v6<A: Authorization, V: Copy + Into<i64>, Pr: NoteFlavor>(
+    bundle: &Bundle<A, V, Pr>,
+) -> Blake2bHash {
+    let mut h = hasher(ZCASH_ORCHARD_HASH_PERSONALIZATION);
+    let mut agh = hasher(ZCASH_ORCHARD_ACTION_GROUPS_HASH_PERSONALIZATION);
+
+    let mut ch = hasher(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION_V6);
+    let mut mh = hasher(ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION);
+    let mut nh = hasher(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION_V6);
+
+    for action in bundle.actions().iter() {
+        ch.update(&action.nullifier().to_bytes());
+        ch.update(&action.cmx().to_bytes());
+        ch.update(&action.encrypted_note().epk_bytes);
+        ch.update(&action.encrypted_note().enc_ciphertext.as_ref()[..Pr::COMPACT_NOTE_SIZE]);
+
+        mh.update(
+            &action.encrypted_note().enc_ciphertext.as_ref()
+                [Pr::COMPACT_NOTE_SIZE..Pr::COMPACT_NOTE_SIZE + MEMO_SIZE],
+        );
+
+        nh.update(&action.cv_net().to_bytes());
+        nh.update(&<[u8; 32]>::from(action.rk()));
+        nh.update(
+            &action.encrypted_note().enc_ciphertext.as_ref()
+                [Pr::COMPACT_NOTE_SIZE + MEMO_SIZE..],
+        );
+        nh.update(&action.encrypted_note().out_ciphertext);
+    }
+
+    agh.update(ch.finalize().as_bytes());
+    agh.update(mh.finalize().as_bytes());
+    agh.update(nh.finalize().as_bytes());
+
+    agh.update(&[bundle.flags().to_byte()]);
+    agh.update(&bundle.anchor().to_bytes());
+    agh.update(&0u32.to_le_bytes());  // expiry_height for ZSA is 0
+
+    let mut burn_hasher = hasher(ZCASH_ORCHARD_ZSA_BURN_HASH_PERSONALIZATION);
+    for burn_item in bundle.burn() {
+        burn_hasher.update(&burn_item.0.to_bytes());
+        burn_hasher.update(&burn_item.1.to_bytes());
+    }
+    agh.update(burn_hasher.finalize().as_bytes());
+    h.update(agh.finalize().as_bytes());
+
+    h.update(&(*bundle.value_balance()).into().to_le_bytes());
+    h.finalize()
 }
 
 /// Construct the commitment for the absent bundle as defined in
@@ -69,20 +162,74 @@ pub fn hash_bundle_txid_empty() -> Blake2bHash {
 /// Construct the `orchard_auth_digest` commitment to the authorizing data of an
 /// authorized bundle as defined in
 /// [ZIP-244: Transaction Identifier Non-Malleability][zip244]
-/// for OrchardVanilla and as defined in
+/// for NormalFlavor and as defined in
 /// [ZIP-246: Digests for the Version 6 Transaction Format][zip246]
-/// for OrchardZSA
+/// for ZsaFlavor
 ///
 /// The `sighash_info_for_kind` closure returns the `SighashInfo` encoding
 /// for a given [`OrchardSighashKind`].
 ///
 /// [zip244]: https://zips.z.cash/zip-0244
 /// [zip246]: https://zips.z.cash/zip-0246
-pub(crate) fn hash_bundle_auth_data<V, Pr: OrchardPrimitives>(
+pub(crate) fn hash_bundle_auth_data<V, Pr: NoteFlavor>(
     bundle: &Bundle<Authorized, V, Pr>,
     sighash_info_for_kind: impl Fn(&OrchardSighashKind) -> Vec<u8>,
 ) -> Blake2bHash {
-    Pr::hash_bundle_auth_data(bundle, sighash_info_for_kind)
+    if Pr::COMPACT_NOTE_SIZE > COMPACT_NOTE_SIZE_VANILLA {
+        hash_bundle_auth_data_v6(bundle, sighash_info_for_kind)
+    } else {
+        hash_bundle_auth_data_v5(bundle, sighash_info_for_kind)
+    }
+}
+
+fn hash_bundle_auth_data_v5<V, Pr: NoteFlavor>(
+    bundle: &Bundle<Authorized, V, Pr>,
+    _sighash_info_for_kind: impl Fn(&OrchardSighashKind) -> Vec<u8>,
+) -> Blake2bHash {
+    let mut h = hasher(ZCASH_ORCHARD_SIGS_HASH_PERSONALIZATION);
+    h.update(bundle.authorization().proof().as_ref());
+    for action in bundle.actions().iter() {
+        assert_eq!(
+            *action.authorization().sighash_kind(),
+            OrchardSighashKind::AllEffecting
+        );
+        h.update(&<[u8; 64]>::from(action.authorization().sig()));
+    }
+    assert_eq!(
+        *bundle.authorization().binding_signature().sighash_kind(),
+        OrchardSighashKind::AllEffecting
+    );
+    h.update(&<[u8; 64]>::from(
+        bundle.authorization().binding_signature().sig(),
+    ));
+    h.finalize()
+}
+
+fn hash_bundle_auth_data_v6<V, Pr: NoteFlavor>(
+    bundle: &Bundle<Authorized, V, Pr>,
+    sighash_info_for_kind: impl Fn(&OrchardSighashKind) -> Vec<u8>,
+) -> Blake2bHash {
+    let mut h = hasher(ZCASH_ORCHARD_SIGS_HASH_PERSONALIZATION);
+    let mut agh = hasher(ZCASH_ORCHARD_ACTION_GROUPS_SIGS_HASH_PERSONALIZATION);
+    agh.update(bundle.authorization().proof().as_ref());
+    let mut sash = hasher(ZCASH_ORCHARD_SPEND_AUTH_SIGS_HASH_PERSONALIZATION);
+    for action in bundle.actions().iter() {
+        let sighash_info = sighash_info_for_kind(action.authorization().sighash_kind());
+        sash.update(&get_compact_size(sighash_info.len()));
+        sash.update(sighash_info.as_slice());
+        sash.update(&<[u8; 64]>::from(action.authorization().sig()));
+    }
+    agh.update(sash.finalize().as_bytes());
+    h.update(agh.finalize().as_bytes());
+
+    let sighash_info =
+        sighash_info_for_kind(bundle.authorization().binding_signature().sighash_kind());
+    h.update(&get_compact_size(sighash_info.len()));
+    h.update(sighash_info.as_slice());
+    h.update(&<[u8; 64]>::from(
+        bundle.authorization().binding_signature().sig(),
+    ));
+    h.finalize()
 }
 
 /// Construct the `orchard_auth_digest` commitment for an absent bundle as defined in
@@ -117,7 +264,7 @@ mod tests {
             Authorized, Bundle,
         },
         circuit::ProvingKey,
-        flavor::{OrchardFlavor, OrchardVanilla, OrchardZSA},
+        flavor::{OrchardFlavor, NormalFlavor, ZsaFlavor},
         keys::{FullViewingKey, Scope, SpendingKey},
         note::AssetBase,
         sighash_kind::test_sighash_info_for_kind,
@@ -164,7 +311,7 @@ mod tests {
     /// is now treated as the expected output for this implementation.
     #[test]
     fn test_hash_bundle_txid_data_for_orchard_vanilla() {
-        let bundle = generate_bundle::<OrchardVanilla>(BundleType::DEFAULT);
+        let bundle = generate_bundle::<NormalFlavor>(BundleType::DEFAULT);
         let sighash = hash_bundle_txid_data(&bundle);
         assert_eq!(
             sighash.to_hex().as_str(),
@@ -174,7 +321,7 @@ mod tests {
         );
     }
 
-    /// Verifies that the hash for an OrchardZSA bundle matches a fixed reference value.
+    /// Verifies that the hash for an ZsaFlavor bundle matches a fixed reference value.
     ///
     /// This is a regression test: inputs are fully deterministic (seeded RNG and fixed
     /// bundle contents), so the resulting digest must remain stable. The reference value
@@ -182,7 +329,7 @@ mod tests {
     /// is now treated as the expected output for this implementation.
     #[test]
     fn test_hash_bundle_txid_data_for_orchard_zsa() {
-        let bundle = generate_bundle::<OrchardZSA>(BundleType::DEFAULT_ZSA);
+        let bundle = generate_bundle::<ZsaFlavor>(BundleType::DEFAULT_ZSA);
         let sighash = hash_bundle_txid_data(&bundle);
         assert_eq!(
             sighash.to_hex().as_str(),
@@ -211,7 +358,7 @@ mod tests {
     /// is now treated as the expected output for this implementation.
     #[test]
     fn test_hash_bundle_auth_data_for_orchard_vanilla() {
-        let bundle = generate_auth_bundle::<OrchardVanilla>(BundleType::DEFAULT);
+        let bundle = generate_auth_bundle::<NormalFlavor>(BundleType::DEFAULT);
         let orchard_auth_digest = hash_bundle_auth_data(&bundle, test_sighash_info_for_kind);
         assert_eq!(
             orchard_auth_digest.to_hex().as_str(),
@@ -221,7 +368,7 @@ mod tests {
         );
     }
 
-    /// Verifies that the authorizing data commitment for an OrchardZSA bundle matches a fixed
+    /// Verifies that the authorizing data commitment for an ZsaFlavor bundle matches a fixed
     /// reference value.
     ///
     /// This is a regression test: inputs are fully deterministic (seeded RNG and fixed
@@ -230,7 +377,7 @@ mod tests {
     /// is now treated as the expected output for this implementation.
     #[test]
     fn test_hash_bundle_auth_data_for_orchard_zsa() {
-        let bundle = generate_auth_bundle::<OrchardZSA>(BundleType::DEFAULT_ZSA);
+        let bundle = generate_auth_bundle::<ZsaFlavor>(BundleType::DEFAULT_ZSA);
         let orchard_auth_digest = hash_bundle_auth_data(&bundle, test_sighash_info_for_kind);
         assert_eq!(
             orchard_auth_digest.to_hex().as_str(),

@@ -1868,7 +1868,7 @@ mod tests {
         use crate::{
             builder::{Builder, BundleType},
             circuit::ProvingKey,
-            flavor::OrchardZSA,
+            flavor::ZsaFlavor,
             keys::SpendAuthorizingKey,
             note::ExtractedNoteCommitment,
             tree::{MerkleHashOrchard, MerklePath},
@@ -1880,7 +1880,7 @@ mod tests {
         use shardtree::ShardTree;
 
         // Setup keys
-        let pk = ProvingKey::build::<OrchardZSA>();
+        let pk = ProvingKey::build::<ZsaFlavor>();
         let sk = SpendingKey::from_bytes([1; 32]).unwrap();
         let fvk = FullViewingKey::from(&sk);
         let recipient = fvk.address_at(0u32, Scope::External);
@@ -1934,7 +1934,7 @@ mod tests {
         let unauthorized = builder.build(&mut rng).unwrap().unwrap().0;
         let sighash = unauthorized.commitment().into();
         let proven = unauthorized.create_proof(&pk, &mut rng).unwrap();
-        let authorized: Bundle<_, i64, OrchardZSA> = proven
+        let authorized: Bundle<_, i64, ZsaFlavor> = proven
             .apply_signatures(rng, sighash, &[SpendAuthorizingKey::from(&sk)])
             .unwrap();
 

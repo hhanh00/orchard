@@ -11,7 +11,7 @@ use subtle::{Choice, ConditionallySelectable, CtOption};
 
 use crate::{
     keys::{EphemeralSecretKey, FullViewingKey, Scope, SpendingKey},
-    primitives::OrchardPrimitives,
+    flavor::NoteFlavor,
     spec::{to_base, to_scalar, NonZeroPallasScalar, PrfExpand},
     value::NoteValue,
     Address,
@@ -482,7 +482,7 @@ pub(crate) fn rho_for_issuance_note(
 
 /// An encrypted note.
 #[derive(Clone)]
-pub struct TransmittedNoteCiphertext<Pr: OrchardPrimitives> {
+pub struct TransmittedNoteCiphertext<Pr: NoteFlavor> {
     /// The serialization of the ephemeral public key
     pub epk_bytes: [u8; 32],
     /// The encrypted note ciphertext
@@ -492,7 +492,7 @@ pub struct TransmittedNoteCiphertext<Pr: OrchardPrimitives> {
     pub out_ciphertext: [u8; 80],
 }
 
-impl<Pr: OrchardPrimitives> fmt::Debug for TransmittedNoteCiphertext<Pr> {
+impl<Pr: NoteFlavor> fmt::Debug for TransmittedNoteCiphertext<Pr> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TransmittedNoteCiphertext")
             .field("epk_bytes", &self.epk_bytes)

@@ -34,11 +34,11 @@ use crate::{
         ENABLE_OUTPUT, ENABLE_SPEND, NF_OLD, RK_X, RK_Y,
     },
     constants::{OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains},
-    flavor::OrchardVanilla,
+    flavor::NormalFlavor,
     note::AssetBase,
 };
 
-impl OrchardCircuit for OrchardVanilla {
+impl OrchardCircuit for NormalFlavor {
     type Config = Config<PallasLookupRangeCheckConfig>;
 
     fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
@@ -607,7 +607,7 @@ impl OrchardCircuit for OrchardVanilla {
         Ok(())
     }
 
-    /// For OrchardVanilla circuits, `build_additional_zsa_witnesses` returns `Value::unknown()`.
+    /// For NormalFlavor circuits, `build_additional_zsa_witnesses` returns `Value::unknown()`.
     ///
     /// # Panics
     /// Panics if the asset is not zatoshi or if `split_flag` is true.
@@ -617,10 +617,10 @@ impl OrchardCircuit for OrchardVanilla {
         split_flag: bool,
     ) -> Value<AdditionalZsaWitnesses> {
         if !(bool::from(asset.is_zatoshi())) {
-            panic!("asset must be zatoshi in OrchardVanilla circuit");
+            panic!("asset must be zatoshi in NormalFlavor circuit");
         }
         if split_flag {
-            panic!("split_flag must be false in OrchardVanilla circuit");
+            panic!("split_flag must be false in NormalFlavor circuit");
         }
         Value::unknown()
     }
@@ -639,14 +639,14 @@ mod tests {
     use crate::{
         bundle::Flags,
         circuit::{Circuit, Instance, Proof, ProvingKey, VerifyingKey, Witnesses, K},
-        flavor::OrchardVanilla,
+        flavor::NormalFlavor,
         keys::SpendValidatingKey,
         note::{AssetBase, Note, Rho},
         tree::MerklePath,
         value::{ValueCommitTrapdoor, ValueCommitment},
     };
 
-    fn generate_circuit_instance<R: RngCore>(mut rng: R) -> (Circuit<OrchardVanilla>, Instance) {
+    fn generate_circuit_instance<R: RngCore>(mut rng: R) -> (Circuit<NormalFlavor>, Instance) {
         let (_, fvk, spent_note) = Note::dummy(&mut rng, None);
 
         let sender_address = spent_note.recipient();
@@ -717,7 +717,7 @@ mod tests {
             .map(|()| generate_circuit_instance(&mut rng))
             .unzip();
 
-        let vk = VerifyingKey::build::<OrchardVanilla>();
+        let vk = VerifyingKey::build::<NormalFlavor>();
 
         // Test that the pinned verification key (representing the circuit)
         // is as expected.
@@ -757,7 +757,7 @@ mod tests {
             );
         }
 
-        let pk = ProvingKey::build::<OrchardVanilla>();
+        let pk = ProvingKey::build::<NormalFlavor>();
         let proof = Proof::create(&pk, &circuits, &instances, &mut rng).unwrap();
         assert!(proof.verify(&vk, &instances).is_ok());
         assert_eq!(proof.0.len(), expected_proof_size);
@@ -767,7 +767,7 @@ mod tests {
     fn serialized_proof_test_case() {
         use std::io::{Read, Write};
 
-        let vk = VerifyingKey::build::<OrchardVanilla>();
+        let vk = VerifyingKey::build::<NormalFlavor>();
 
         fn write_test_case<W: Write>(
             mut w: W,
@@ -836,7 +836,7 @@ mod tests {
                 let (circuit, instance) = generate_circuit_instance(OsRng);
                 let instances = &[instance.clone()];
 
-                let pk = ProvingKey::build::<OrchardVanilla>();
+                let pk = ProvingKey::build::<NormalFlavor>();
                 let proof = Proof::create(&pk, &[circuit], instances, &mut rng).unwrap();
                 assert!(proof.verify(&vk, instances).is_ok());
 
@@ -867,7 +867,7 @@ mod tests {
             .titled("Orchard Action Circuit", ("sans-serif", 60))
             .unwrap();
 
-        let circuit = Circuit::<OrchardVanilla> {
+        let circuit = Circuit::<NormalFlavor> {
             witnesses: Witnesses::default(),
             phantom: core::marker::PhantomData,
         };

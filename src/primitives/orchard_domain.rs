@@ -1,19 +1,19 @@
 //! Orchard-specific note encryption domain.
 
 use crate::{
-    action::Action, note::Rho, primitives::compact_action::CompactAction,
-    primitives::orchard_primitives::OrchardPrimitives,
+    action::Action, flavor::NoteFlavor, note::Rho,
+    primitives::compact_action::CompactAction,
 };
 
 /// Orchard-specific note encryption logic.
 #[derive(Debug, Clone)]
-pub struct OrchardDomain<Pr: OrchardPrimitives> {
+pub struct OrchardDomain<F: NoteFlavor> {
     /// A parameter needed to generate the nullifier.
     pub rho: Rho,
-    phantom: core::marker::PhantomData<Pr>,
+    phantom: core::marker::PhantomData<F>,
 }
 
-impl<Pr: OrchardPrimitives> memuse::DynamicUsage for OrchardDomain<Pr> {
+impl<F: NoteFlavor> memuse::DynamicUsage for OrchardDomain<F> {
     fn dynamic_usage(&self) -> usize {
         self.rho.dynamic_usage()
     }
@@ -22,9 +22,9 @@ impl<Pr: OrchardPrimitives> memuse::DynamicUsage for OrchardDomain<Pr> {
     }
 }
 
-impl<Pr: OrchardPrimitives> OrchardDomain<Pr> {
+impl<F: NoteFlavor> OrchardDomain<F> {
     /// Constructs a domain that can be used to trial-decrypt this action's output note.
-    pub fn for_action<T>(act: &Action<T, Pr>) -> Self {
+    pub fn for_action<T>(act: &Action<T, F>) -> Self {
         Self {
             rho: act.rho(),
             phantom: Default::default(),
@@ -40,7 +40,7 @@ impl<Pr: OrchardPrimitives> OrchardDomain<Pr> {
     }
 
     /// Constructs a domain that can be used to trial-decrypt this compact action's output note.
-    pub fn for_compact_action(act: &CompactAction<Pr>) -> Self {
+    pub fn for_compact_action(act: &CompactAction<F>) -> Self {
         Self {
             rho: act.rho(),
             phantom: Default::default(),
