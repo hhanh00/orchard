@@ -10,8 +10,8 @@ use rand::RngCore;
 use subtle::{Choice, ConditionallySelectable, CtOption};
 
 use crate::{
+    flavor::{NoteFlavor, NormalFlavor},
     keys::{EphemeralSecretKey, FullViewingKey, Scope, SpendingKey},
-    flavor::NoteFlavor,
     spec::{to_base, to_scalar, NonZeroPallasScalar, PrfExpand},
     value::NoteValue,
     Address,
@@ -27,6 +27,34 @@ pub use self::commitment::{ExtractedNoteCommitment, NoteCommitment};
 
 pub(crate) mod nullifier;
 pub use self::nullifier::Nullifier;
+
+/// The version of note plaintext format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NoteVersion {
+    /// V2 note plaintext format (used by Orchard pool).
+    V2,
+    /// V3 note plaintext format (used by Ironwood pool).
+    V3,
+}
+
+impl NoteVersion {
+    /// Returns the lead byte for this note version.
+    pub fn lead_byte(&self) -> u8 {
+        match self {
+            NoteVersion::V2 => 0x02,
+            NoteVersion::V3 => 0x03,
+        }
+    }
+
+    /// Parses a `NoteVersion` from a lead byte.
+    pub fn from_lead_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0x02 => Some(NoteVersion::V2),
+            0x03 => Some(NoteVersion::V3),
+            _ => None,
+        }
+    }
+}
 
 /// The randomness used to construct a note.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -148,7 +176,7 @@ impl ConditionallySelectable for RandomSeed {
 
 /// A discrete amount of funds received by an address.
 #[derive(Debug, Copy, Clone)]
-pub struct Note {
+pub struct Note<Pr: NoteFlavor = NormalFlavor> {
     /// The recipient of the funds.
     recipient: Address,
     /// The value of this note.
@@ -175,6 +203,8 @@ pub struct Note {
     ///
     /// If it is not a split note, this field is `None`.
     rseed_split_note: CtOption<RandomSeed>,
+    /// The note plaintext version, determining rcm derivation strategy.
+    version: NoteVersion,
 }
 
 impl PartialEq for Note {
