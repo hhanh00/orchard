@@ -7,20 +7,20 @@ use core::fmt;
 
 use getset::Getters;
 use pasta_curves::pallas;
-use zcash_note_encryption::{note_bytes::NoteBytes, OutgoingCipherKey};
+use zcash_note_encryption::OutgoingCipherKey;
 use zip32::ChildIndex;
 
 use crate::{
-    bundle::Flags,
     flavor::NoteFlavor,
+    note::AssetBase,
+    sighash_kind::OrchardSighashKind,
+    bundle::{BundleVersion, Flags},
     keys::{FullViewingKey, SpendingKey},
-    note::{AssetBase, ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
-    primitives::{
-        redpallas::{self, Binding, SpendAuth},
-    },
+    note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext},
+    primitives::redpallas::{self, Binding, SpendAuth},
     tree::MerklePath,
     value::{NoteValue, ValueCommitTrapdoor, ValueCommitment, ValueSum},
-    Address, Anchor, Proof,
+    Address, Anchor, NoteVersion, Proof,
 };
 
 mod parse;
@@ -67,6 +67,13 @@ pub struct Bundle {
     /// are consistent with these flags (i.e. are dummies as appropriate).
     pub(crate) flags: Flags,
 
+    /// The value pool and protocol version this bundle is encoded under.
+    ///
+    /// This is set by the Creator, and determines how the bundle's flags are interpreted and
+    /// which [`crate::Bundle`] the Transaction Extractor produces. The flags are always
+    /// consistent with this version (by parsing or construction).
+    pub(crate) bundle_version: BundleVersion,
+
     /// The sum of the values of all `actions`.
     ///
     /// This is initialized by the Creator, and updated by the Constructor as spends or
@@ -89,13 +96,6 @@ pub struct Bundle {
     /// - This is `None` until it is set by the IO Finalizer.
     /// - The Transaction Extractor uses this to produce the binding signature.
     pub(crate) bsk: Option<redpallas::SigningKey<Binding>>,
-
-    /// The burn values for this bundle (ZSA only).
-    ///
-    /// Each entry is a pair of (asset, value) representing an amount of that asset
-    /// being burned in this transaction. For vanilla transactions, this is empty.
-    #[getset(get = "pub")]
-    pub(crate) burn: Vec<(AssetBase, NoteValue)>,
 }
 
 impl Bundle {
@@ -107,6 +107,16 @@ impl Bundle {
     /// fields of the bundle dependent on them, such as `value_sum` and `bsk`.
     pub fn actions_mut(&mut self) -> &mut [Action] {
         &mut self.actions
+    }
+
+    /// Returns the byte encoding of this bundle's flags under its own [`BundleVersion`].
+    ///
+    /// This is infallible: a PCZT bundle is only ever constructed (by parsing or by the builder)
+    /// with flags that are representable under its version.
+    pub fn flag_byte(&self) -> u8 {
+        self.flags
+            .to_byte(self.bundle_version)
+            .expect("flags are validated against the bundle version at construction")
     }
 }
 
@@ -171,12 +181,6 @@ pub struct Spend {
     /// information, or after signatures have been applied, this can be redacted.
     pub(crate) value: Option<NoteValue>,
 
-    /// The asset base for the note being spent.
-    ///
-    /// - This is set by the Constructor.
-    /// - Required to verify the nullifier for ZSA (non-zatoshi) spends.
-    pub(crate) asset: Option<AssetBase>,
-
     /// The rho value for the note being spent.
     ///
     /// - This is set by the Constructor.
@@ -192,23 +196,17 @@ pub struct Spend {
     /// - This is required by the Prover.
     pub(crate) rseed: Option<RandomSeed>,
 
-    /// The split note seed randomness, if this is a split spend.
-    ///
-    /// When present, this is used instead of `rseed` for nullifier derivation
-    /// (ZIP-226 § Split Notes). For regular (non-split) spends this is `None`.
-    pub(crate) rseed_split_note: Option<RandomSeed>,
-
-    /// Whether this spend is a split spend.
-    ///
-    /// Split spends have their value excluded from the value sum to prevent
-    /// double-counting, per ZIP-226.
-    pub(crate) split_flag: bool,
-
     /// The full viewing key that received the note being spent.
     ///
     /// - This is set by the Updater.
     /// - This is required by the Prover.
     pub(crate) fvk: Option<FullViewingKey>,
+
+    /// The plaintext version of the note being spent.
+    ///
+    /// This is set by the Constructor, and is required by Verifiers and
+    /// Provers to reconstruct the note commitment.
+    pub(crate) note_version: NoteVersion,
 
     /// A witness from the note to the bundle's anchor.
     ///
@@ -246,27 +244,19 @@ pub struct Output {
     /// A commitment to the new note being created.
     pub(crate) cmx: ExtractedNoteCommitment,
 
-    /// The ephemeral public key for the encrypted note.
-    pub(crate) ephemeral_key: [u8; 32],
-
-    /// The encrypted note ciphertext.
+    /// The plaintext version of the new note being created.
     ///
-    /// Stored as raw bytes because the length differs between vanilla (580 bytes)
-    /// and ZSA (612 bytes). The typed [`TransmittedNoteCiphertext`] is reconstructed
-    /// at extraction time based on the bundle's flavor.
-    ///
-    /// [`TransmittedNoteCiphertext`]: crate::note::TransmittedNoteCiphertext
-    pub(crate) enc_ciphertext: Vec<u8>,
+    /// This is set by the Constructor, and is required by Verifiers and
+    /// Provers to reconstruct the note commitment.
+    pub(crate) note_version: NoteVersion,
 
-    /// The encrypted outgoing ciphertext.
-    pub(crate) out_ciphertext: [u8; 80],
-
-    /// The asset base for this output.
+    /// The transmitted note ciphertext.
     ///
-    /// For vanilla transactions, this is always [`AssetBase::zatoshi()`].
-    /// For ZSA transactions, this can be any custom asset.
-    #[getset(get = "pub")]
-    pub(crate) asset: AssetBase,
+    /// This contains the following PCZT fields:
+    /// - `ephemeral_key`
+    /// - `enc_ciphertext`
+    /// - `out_ciphertext`
+    pub(crate) encrypted_note: TransmittedNoteCiphertext,
 
     /// The address that will receive the output.
     ///
@@ -274,7 +264,9 @@ pub struct Output {
     /// - This is required by the Prover.
     /// - The Signer can use `recipient` and `rseed` (if present) to verify that
     ///   `enc_ciphertext` is correctly encrypted (and contains a note plaintext matching
-    ///   the public commitments), and to confirm the value of the memo.
+    ///   the public commitments), and to confirm the value of the memo. This does not apply
+    ///   to the restricted builder's zero-valued output paired with a real spend, whose
+    ///   `enc_ciphertext` is deliberately randomized; its note commitment remains verifiable.
     pub(crate) recipient: Option<Address>,
 
     /// The value of the output.
@@ -292,7 +284,9 @@ pub struct Output {
     /// - This is required by the Prover.
     /// - The Signer can use `recipient` and `rseed` (if present) to verify that
     ///   `enc_ciphertext` is correctly encrypted (and contains a note plaintext matching
-    ///   the public commitments), and to confirm the value of the memo.
+    ///   the public commitments), and to confirm the value of the memo. This does not apply
+    ///   to the restricted builder's zero-valued output paired with a real spend, whose
+    ///   `enc_ciphertext` is deliberately randomized; its note commitment remains verifiable.
     pub(crate) rseed: Option<RandomSeed>,
 
     /// The `ock` value used to encrypt `out_ciphertext`.
@@ -321,9 +315,8 @@ impl fmt::Debug for Output {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Output")
             .field("cmx", &self.cmx)
-            .field("ephemeral_key", &self.ephemeral_key)
-            .field("enc_ciphertext_len", &self.enc_ciphertext.len())
-            .field("asset", &self.asset)
+            .field("note_version", &self.note_version)
+            .field("encrypted_note", &self.encrypted_note)
             .field("recipient", &self.recipient)
             .field("value", &self.value)
             .field("rseed", &self.rseed)
@@ -331,25 +324,6 @@ impl fmt::Debug for Output {
             .field("user_address", &self.user_address)
             .field("proprietary", &self.proprietary)
             .finish_non_exhaustive()
-    }
-}
-
-impl Output {
-    /// Reconstructs a typed [`TransmittedNoteCiphertext`] from the raw stored bytes,
-    /// using the given flavor.
-    ///
-    /// Returns `None` if the stored ciphertext bytes don't match the expected size
-    /// for the given flavor.
-    ///
-    /// [`TransmittedNoteCiphertext`]: crate::note::TransmittedNoteCiphertext
-    pub fn encrypted_note<Pr: NoteFlavor>(
-        &self,
-    ) -> Option<crate::note::TransmittedNoteCiphertext<Pr>> {
-        Some(crate::note::TransmittedNoteCiphertext {
-            epk_bytes: self.ephemeral_key,
-            enc_ciphertext: Pr::NoteCiphertextBytes::from_slice(&self.enc_ciphertext)?,
-            out_ciphertext: self.out_ciphertext,
-        })
     }
 }
 
@@ -402,38 +376,124 @@ mod tests {
     use shardtree::{store::memory::MemoryShardStore, ShardTree};
 
     use crate::{
-        builder::{Builder, BundleType},
-        circuit::ProvingKey,
+    flavor::NoteFlavor,
+    note::AssetBase,
+    sighash_kind::OrchardSighashKind,
+        builder::{Builder, BundleMetadata, BundleType},
+        bundle::{BundleVersion, Flags},
+        circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
         constants::MERKLE_DEPTH_ORCHARD,
-        flavor::{NormalFlavor, ZsaFlavor},
         keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
-        note::{AssetBase, ExtractedNoteCommitment, RandomSeed, Rho},
-        pczt::{ProverError, TxExtractorError, Zip32Derivation},
+        note::{ExtractedNoteCommitment, NoteVersion, Nullifier, RandomSeed, Rho},
+        pczt::{
+            IoFinalizerError, ParseError, ProverError, SignerError, TxExtractorError, VerifyError,
+            Zip32Derivation,
+        },
         primitives::redpallas::{self, SpendAuth},
-        tree::{MerkleHashOrchard, EMPTY_ROOTS},
+        tree::{MerkleHashOrchard, MerklePath, EMPTY_ROOTS},
         value::NoteValue,
         Note,
     };
 
-    /// Builds a minimal shielding-style pczt bundle, finalizes IO, and returns
-    /// it ready for `create_proof`. Used by identity-`rk` tests below.
+    /// Builds a cross-address-restricted pczt bundle with one real spend (15_000 at an
+    /// external address) and one wallet-controlled change output (5_000 at a different
+    /// wallet's internal address), without finalizing IO.
+    ///
+    /// Returns the bundle, its metadata, and the spend authorizing keys for the spend
+    /// and the change output respectively.
+    fn restricted_pczt_bundle(
+        mut rng: OsRng,
+    ) -> (
+        super::Bundle,
+        BundleMetadata,
+        SpendAuthorizingKey,
+        SpendAuthorizingKey,
+    ) {
+        let spend_sk = SpendingKey::random(&mut rng);
+        let spend_fvk = FullViewingKey::from(&spend_sk);
+        let spend_recipient = spend_fvk.address_at(0u32, Scope::External);
+        let change_sk = SpendingKey::random(&mut rng);
+        let change_fvk = FullViewingKey::from(&change_sk);
+        let change_recipient = change_fvk.address_at(0u32, Scope::Internal);
+        let bundle_version = BundleVersion::orchard_v3();
+        let note_version = bundle_version.note_version();
+
+        let rho = Rho::from_nf_old(Nullifier::dummy(&mut rng));
+        let note = Note::new(
+            spend_recipient,
+            NoteValue::from_raw(15_000),
+            rho,
+            note_version,
+            &mut rng,
+        );
+        let merkle_path = MerklePath::dummy(&mut rng);
+        let anchor = merkle_path.root(note.commitment().into());
+
+        let mut builder = Builder::new(
+            BundleType::DEFAULT,
+            bundle_version,
+            bundle_version.default_flags(),
+            anchor,
+        )
+        .unwrap();
+        builder.add_spend(spend_fvk, note, merkle_path).unwrap();
+        builder
+            .add_change_output(
+                change_fvk,
+                None,
+                change_recipient,
+                NoteValue::from_raw(5_000),
+                [0u8; 512],
+            )
+            .unwrap();
+
+        let (pczt_bundle, bundle_meta) = builder.build_for_pczt(&mut rng).unwrap();
+        (
+            pczt_bundle,
+            bundle_meta,
+            SpendAuthorizingKey::from(&spend_sk),
+            SpendAuthorizingKey::from(&change_sk),
+        )
+    }
+
+    /// Builds a minimal shielding-style pczt bundle, finalizes IO, and returns it ready for
+    /// tests that exercise `create_proof` and `extract`.
     fn minimal_finalized_pczt_bundle(mut rng: OsRng) -> super::Bundle {
         let sk = SpendingKey::random(&mut rng);
         let fvk = FullViewingKey::from(&sk);
         let recipient = fvk.address_at(0u32, Scope::External);
-
         let mut builder = Builder::new(
             BundleType::DEFAULT,
+            BundleVersion::orchard_v2(),
+            BundleVersion::orchard_v2().default_flags(),
             EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
-        );
+        )
+        .unwrap();
         builder
-            .add_output(None, recipient, NoteValue::from_raw(5000), AssetBase::zatoshi(), [0u8; 512])
+            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
             .unwrap();
         let mut pczt_bundle = builder.build_for_pczt(&mut rng).unwrap().0;
 
         let sighash = [0; 32];
         pczt_bundle.finalize_io(sighash, rng).unwrap();
         pczt_bundle
+    }
+
+    fn ironwood_output_pczt_bundle(mut rng: OsRng) -> super::Bundle {
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+        let mut builder = Builder::new(
+            BundleType::DEFAULT,
+            BundleVersion::ironwood_v3(),
+            BundleVersion::ironwood_v3().default_flags(),
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+        )
+        .unwrap();
+        builder
+            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
+            .unwrap();
+        builder.build_for_pczt(&mut rng).unwrap().0
     }
 
     fn identity_rk() -> redpallas::VerificationKey<SpendAuth> {
@@ -443,7 +503,8 @@ mod tests {
 
     #[test]
     fn shielding_bundle() {
-        let pk = ProvingKey::build::<NormalFlavor>();
+        let bundle_version = BundleVersion::orchard_v2();
+        let pk = ProvingKey::build(bundle_version.circuit_version());
         let mut rng = OsRng;
 
         let sk = SpendingKey::random(&mut rng);
@@ -453,16 +514,13 @@ mod tests {
         // Run the Creator and Constructor roles.
         let mut builder = Builder::new(
             BundleType::DEFAULT,
+            bundle_version,
+            bundle_version.default_flags(),
             EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
-        );
+        )
+        .unwrap();
         builder
-            .add_output(
-                None,
-                recipient,
-                NoteValue::from_raw(5000),
-                AssetBase::zatoshi(),
-                [0u8; 512],
-            )
+            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
             .unwrap();
         let balance: i64 = builder.value_balance().unwrap();
         assert_eq!(balance, -5000);
@@ -484,8 +542,178 @@ mod tests {
     }
 
     #[test]
+    fn create_proof_uses_proving_key_circuit_version() {
+        let pk = ProvingKey::build(OrchardCircuitVersion::PostNu6_3);
+        let vk = VerifyingKey::build(OrchardCircuitVersion::PostNu6_3);
+        let rng = OsRng;
+
+        let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
+        let sighash = [0; 32];
+        // This is the load-bearing assertion: if PCZT proving still built FixedPostNu6_2
+        // circuits unconditionally, `Proof::create` would reject them for this post-NU 6.3 key.
+        pczt_bundle.create_proof(&pk, rng).unwrap();
+
+        let bundle = pczt_bundle
+            .extract::<i64>()
+            .unwrap()
+            .unwrap()
+            .apply_binding_signature(sighash, rng)
+            .unwrap();
+
+        assert!(bundle.verify_proof(&vk).is_ok());
+    }
+
+    #[test]
+    fn qr_output_version_checks_note_commitment() {
+        let mut rng = OsRng;
+        let pk = ProvingKey::build(OrchardCircuitVersion::PostNu6_3);
+        let vk = VerifyingKey::build(OrchardCircuitVersion::PostNu6_3);
+
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        let mut builder = Builder::new(
+            BundleType::DEFAULT,
+            BundleVersion::ironwood_v3(),
+            BundleVersion::ironwood_v3().default_flags(),
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+        )
+        .unwrap();
+        builder
+            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
+            .unwrap();
+        let (mut pczt_bundle, bundle_meta) = builder.build_for_pczt(&mut rng).unwrap();
+        let output_action_index = bundle_meta.output_action_index(0).unwrap();
+
+        let action = &pczt_bundle.actions()[output_action_index];
+        assert_eq!(action.output.note_version(), &NoteVersion::V3);
+        action
+            .output
+            .verify_note_commitment(&action.spend)
+            .expect("V3 output version verifies the QR note commitment");
+
+        let sighash = [0; 32];
+        pczt_bundle.finalize_io(sighash, rng).unwrap();
+        pczt_bundle
+            .create_proof(&pk, rng)
+            .expect("V3 output version reconstructs the QR note for proving");
+
+        pczt_bundle.actions_mut()[output_action_index]
+            .output
+            .note_version = NoteVersion::V2;
+        let action = &pczt_bundle.actions()[output_action_index];
+        assert!(matches!(
+            action.output.verify_note_commitment(&action.spend),
+            Err(VerifyError::InvalidExtractedNoteCommitment)
+        ));
+        pczt_bundle.create_proof(&pk, rng).unwrap();
+        let bundle = pczt_bundle
+            .extract::<i64>()
+            .unwrap()
+            .unwrap()
+            .apply_binding_signature(sighash, rng)
+            .unwrap();
+        assert!(bundle.verify_proof(&vk).is_err());
+    }
+
+    #[test]
+    fn qr_spend_version_checks_nullifier_and_proves() {
+        let pk = ProvingKey::build(OrchardCircuitVersion::PostNu6_3);
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        let value = NoteValue::from_raw(15_000);
+        let note = {
+            let rho = Rho::from_bytes(&pallas::Base::random(&mut rng).to_repr()).unwrap();
+            loop {
+                if let Some(note) = Note::from_parts(
+                    recipient,
+                    value,
+                    rho,
+                    RandomSeed::random(&mut rng, &rho),
+                    NoteVersion::V3,
+                )
+                .into_option()
+                {
+                    break note;
+                }
+            }
+        };
+
+        let (anchor, merkle_path) = {
+            let cmx: ExtractedNoteCommitment = note.commitment().into();
+            let leaf = MerkleHashOrchard::from_cmx(&cmx);
+            let mut tree: ShardTree<MemoryShardStore<MerkleHashOrchard, u32>, 32, 16> =
+                ShardTree::new(MemoryShardStore::empty(), 100);
+            tree.append(
+                leaf,
+                Retention::Checkpoint {
+                    id: 0,
+                    marking: Marking::Marked,
+                },
+            )
+            .unwrap();
+            let root = tree.root_at_checkpoint_id(&0).unwrap().unwrap();
+            let position = tree.max_leaf_position(None).unwrap().unwrap();
+            let merkle_path = tree
+                .witness_at_checkpoint_id(position, &0)
+                .unwrap()
+                .unwrap();
+            assert_eq!(root, merkle_path.root(MerkleHashOrchard::from_cmx(&cmx)));
+            (root.into(), merkle_path)
+        };
+
+        let bundle_version = BundleVersion::ironwood_v3();
+        let mut builder = Builder::new(
+            BundleType::DEFAULT,
+            bundle_version,
+            bundle_version.default_flags(),
+            anchor,
+        )
+        .unwrap();
+        builder
+            .add_spend(fvk.clone(), note, merkle_path.into())
+            .unwrap();
+        builder
+            .add_output(None, recipient, NoteValue::from_raw(10_000), [0u8; 512])
+            .unwrap();
+        let (mut pczt_bundle, bundle_meta) = builder.build_for_pczt(&mut rng).unwrap();
+        let spend_action_index = bundle_meta.spend_action_index(0).unwrap();
+
+        let action = &pczt_bundle.actions()[spend_action_index];
+        assert_eq!(action.spend.note_version(), &NoteVersion::V3);
+        action
+            .spend
+            .verify_nullifier(None)
+            .expect("V3 spend version verifies the QR note nullifier");
+
+        pczt_bundle.finalize_io([0; 32], rng).unwrap();
+        pczt_bundle
+            .create_proof(&pk, rng)
+            .expect("V3 spend version reconstructs the QR note for proving");
+
+        pczt_bundle.actions_mut()[spend_action_index]
+            .spend
+            .note_version = NoteVersion::V2;
+        let action = &pczt_bundle.actions()[spend_action_index];
+        assert!(matches!(
+            action.spend.verify_nullifier(None),
+            Err(VerifyError::InvalidNullifier)
+        ));
+        assert!(matches!(
+            pczt_bundle.create_proof(&pk, rng),
+            Err(ProverError::RhoMismatch)
+        ));
+    }
+
+    #[test]
     fn shielded_bundle() {
-        let pk = ProvingKey::build::<NormalFlavor>();
+        let bundle_version = BundleVersion::orchard_v2();
+        let pk = ProvingKey::build(bundle_version.circuit_version());
         let mut rng = OsRng;
 
         // Pretend we derived the spending key via ZIP 32.
@@ -503,9 +731,9 @@ mod tests {
                 if let Some(note) = Note::from_parts(
                     recipient,
                     value,
-                    AssetBase::zatoshi(),
                     rho,
                     RandomSeed::random(&mut rng, &rho),
+                    bundle_version.note_version(),
                 )
                 .into_option()
                 {
@@ -539,25 +767,25 @@ mod tests {
         };
 
         // Run the Creator and Constructor roles.
-        let mut builder = Builder::new(BundleType::DEFAULT, anchor);
+        let bundle_version = BundleVersion::orchard_v2();
+        let mut builder = Builder::new(
+            BundleType::DEFAULT,
+            bundle_version,
+            bundle_version.default_flags(),
+            anchor,
+        )
+        .unwrap();
         builder
             .add_spend(fvk.clone(), note, merkle_path.into())
             .unwrap();
         builder
-            .add_output(
-                None,
-                recipient,
-                NoteValue::from_raw(10_000),
-                AssetBase::zatoshi(),
-                [0u8; 512],
-            )
+            .add_output(None, recipient, NoteValue::from_raw(10_000), [0u8; 512])
             .unwrap();
         builder
             .add_output(
                 Some(fvk.to_ovk(Scope::Internal)),
                 fvk.address_at(0u32, Scope::Internal),
                 NoteValue::from_raw(5_000),
-                AssetBase::zatoshi(),
                 [0u8; 512],
             )
             .unwrap();
@@ -606,7 +834,7 @@ mod tests {
 
     #[test]
     fn create_proof_rejects_identity_rk() {
-        let pk = ProvingKey::build::<NormalFlavor>();
+        let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
@@ -620,7 +848,7 @@ mod tests {
 
     #[test]
     fn extract_rejects_identity_rk() {
-        let pk = ProvingKey::build::<NormalFlavor>();
+        let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
@@ -637,127 +865,9 @@ mod tests {
         ));
     }
 
-    /// Tests that ZSA-sized ciphertexts (612 bytes) are produced for ZSA bundles
-    /// and that the raw bytes round-trip correctly.
-    #[test]
-    fn zsa_ciphertext_roundtrip() {
-        let mut rng = OsRng;
-
-        let sk = SpendingKey::random(&mut rng);
-        let fvk = FullViewingKey::from(&sk);
-        let recipient = fvk.address_at(0u32, Scope::External);
-
-        // In a ZSA bundle, all outputs use ZSA flavor (612-byte ciphertexts),
-        // even zatoshi-valued outputs (for consistency with padding dummies).
-        let mut builder = Builder::new(
-            BundleType::DEFAULT_ZSA,
-            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
-        );
-        builder
-            .add_output(None, recipient, NoteValue::from_raw(5000), AssetBase::zatoshi(), [0u8; 512])
-            .unwrap();
-        let pczt_bundle = builder.build_for_pczt(&mut rng).unwrap().0;
-        assert!(pczt_bundle.flags().zsa_enabled());
-
-        let action = &pczt_bundle.actions()[0];
-        assert_eq!(action.output().asset(), &AssetBase::zatoshi());
-        // ZSA bundle → ZSA-sized ciphertexts even for zatoshi outputs
-        assert_eq!(action.output().enc_ciphertext().len(), 612);
-
-        // encrypted_note::<ZsaFlavor>() should succeed (612 bytes)
-        assert!(action.output().encrypted_note::<ZsaFlavor>().is_some());
-        // encrypted_note::<NormalFlavor>() should fail (wrong size: 612 != 580)
-        assert!(action.output().encrypted_note::<NormalFlavor>().is_none());
-    }
-
-    /// Verify that AssetBase::random produces a different point from zatoshi.
-    #[test]
-    fn asset_base_random_is_not_zatoshi() {
-        let mut rng = OsRng;
-        let random = AssetBase::random(&mut rng);
-        assert_ne!(random, AssetBase::zatoshi());
-    }
-
-    /// Full ZSA PCZT pipeline with a non-zatoshi asset spend.
-    #[test]
-    fn zsa_shielded_bundle() {
-        let pk = ProvingKey::build::<ZsaFlavor>();
-        let mut rng = OsRng;
-
-        let sk = SpendingKey::random(&mut rng);
-        let ask = SpendAuthorizingKey::from(&sk);
-        let fvk = FullViewingKey::from(&sk);
-        let recipient = fvk.address_at(0u32, Scope::External);
-
-        // Create a non-zatoshi AssetBase and a prior note of that asset.
-        let non_zatoshi_asset = AssetBase::random(&mut rng);
-        assert_ne!(non_zatoshi_asset, AssetBase::zatoshi());
-
-        let value = NoteValue::from_raw(15_000);
-        let note = {
-            let rho = Rho::from_bytes(&pallas::Base::random(&mut rng).to_repr()).unwrap();
-            loop {
-                if let Some(note) = Note::from_parts(
-                    recipient, value, non_zatoshi_asset, rho,
-                    RandomSeed::random(&mut rng, &rho),
-                ).into_option() {
-                    break note;
-                }
-            }
-        };
-
-        // Build a Merkle tree with this note.
-        let (anchor, merkle_path) = {
-            let cmx: ExtractedNoteCommitment = note.commitment().into();
-            let leaf = MerkleHashOrchard::from_cmx(&cmx);
-            let mut tree: ShardTree<MemoryShardStore<MerkleHashOrchard, u32>, 32, 16> =
-                ShardTree::new(MemoryShardStore::empty(), 100);
-            tree.append(leaf, Retention::Checkpoint { id: 0, marking: Marking::Marked }).unwrap();
-            let root = tree.root_at_checkpoint_id(&0).unwrap().unwrap();
-            let position = tree.max_leaf_position(None).unwrap().unwrap();
-            let merkle_path = tree.witness_at_checkpoint_id(position, &0).unwrap().unwrap();
-            (root.into(), merkle_path)
-        };
-
-        // Build PCZT with ZSA flags: 1 spend + 1 output of non-zatoshi asset.
-        // 1:1 ratio avoids split notes (not yet supported in PCZT).
-        let mut builder = Builder::new(BundleType::DEFAULT_ZSA, anchor);
-        builder.add_spend(fvk.clone(), note, merkle_path.into()).unwrap();
-        builder.add_output(
-            Some(fvk.to_ovk(Scope::Internal)),
-            fvk.address_at(0u32, Scope::Internal),
-            NoteValue::from_raw(15_000),
-            non_zatoshi_asset,
-            [0u8; 512],
-        ).unwrap();
-        let mut pczt_bundle = builder.build_for_pczt(&mut rng).unwrap().0;
-        assert!(pczt_bundle.flags().zsa_enabled());
-
-        // In a ZSA bundle, ALL outputs have 612-byte ciphertexts (including dummies).
-        for action in pczt_bundle.actions() {
-            assert_eq!(action.output().enc_ciphertext().len(), 612,
-                "ZSA bundle outputs must be 612 bytes, got {}", action.output().enc_ciphertext().len());
-        }
-
-        // Sign the real spend BEFORE finalize_io (which clears dummy_sk via take()).
-        let sighash = [0; 32];
-        for action in pczt_bundle.actions_mut() {
-            if action.spend().dummy_sk().is_none() {
-                action.sign(sighash, &ask, OsRng).unwrap();
-            }
-        }
-
-        // Run IO Finalizer (signs dummy spends), then prover, extract, bind.
-        pczt_bundle.finalize_io(sighash, OsRng).unwrap();
-
-        pczt_bundle.create_proof(&pk, OsRng).unwrap();
-        let bundle = pczt_bundle.extract_zsa::<i64>().unwrap().unwrap();
-        bundle.apply_binding_signature(sighash, OsRng).unwrap();
-    }
-
     #[test]
     fn extract_rejects_non_canonical_proof() {
-        let pk = ProvingKey::build::<NormalFlavor>();
+        let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
         let rng = OsRng;
 
         let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
@@ -777,5 +887,337 @@ mod tests {
             pczt_bundle.extract::<i64>(),
             Err(TxExtractorError::NonCanonicalProofSize { .. }),
         ));
+    }
+
+    #[test]
+    fn parse_uses_bundle_version_for_flags() {
+        let anchor: crate::Anchor = EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into();
+
+        // Bit 2 is reserved pre-NU6.3, and rejected for Orchard post-NU6.3 (which mandates
+        // the cross-address restriction); only Ironwood may set it.
+        for pr in [
+            BundleVersion::orchard_insecure_v1(),
+            BundleVersion::orchard_v2(),
+            BundleVersion::orchard_v3(),
+        ] {
+            assert!(matches!(
+                super::Bundle::parse(
+                    vec![],
+                    0b0000_0100,
+                    pr,
+                    (0, false),
+                    anchor.to_bytes(),
+                    None,
+                    None,
+                ),
+                Err(ParseError::UnexpectedFlagBitsSet),
+            ));
+        }
+
+        let parsed = super::Bundle::parse(
+            vec![],
+            0b0000_0100,
+            BundleVersion::ironwood_v3(),
+            (0, false),
+            anchor.to_bytes(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(parsed.flags().cross_address_enabled());
+        assert_eq!(
+            parsed.flags().to_byte(BundleVersion::ironwood_v3()),
+            Some(0b0000_0100)
+        );
+        assert_eq!(
+            parsed.flags().to_byte(BundleVersion::orchard_v2()),
+            Some(0b0000_0000)
+        );
+
+        let restricted = super::Bundle::parse(
+            vec![],
+            0b0000_0011,
+            BundleVersion::orchard_v3(),
+            (0, false),
+            anchor.to_bytes(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(!restricted.flags().cross_address_enabled());
+        assert_eq!(
+            restricted.flags().to_byte(BundleVersion::orchard_v3()),
+            Some(0b0000_0011)
+        );
+        assert_eq!(
+            restricted.flags().to_byte(BundleVersion::orchard_v2()),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_preserves_note_versions() {
+        let bundle_version = BundleVersion::ironwood_v3();
+        let pczt_bundle = ironwood_output_pczt_bundle(OsRng);
+        let flags = pczt_bundle.flags.to_byte(bundle_version).unwrap();
+        let anchor = pczt_bundle.anchor.to_bytes();
+        let actions = pczt_bundle.actions;
+
+        let parsed = super::Bundle::parse(
+            actions,
+            flags,
+            bundle_version,
+            (5000, true),
+            anchor,
+            None,
+            None,
+        )
+        .unwrap();
+        let action = &parsed.actions()[0];
+
+        assert_eq!(action.spend().note_version(), &NoteVersion::V3);
+        assert_eq!(action.output().note_version(), &NoteVersion::V3);
+    }
+
+    #[test]
+    fn parse_rejects_output_note_version_mismatch() {
+        let bundle_version = BundleVersion::ironwood_v3();
+        let pczt_bundle = ironwood_output_pczt_bundle(OsRng);
+        let flags = pczt_bundle.flags.to_byte(bundle_version).unwrap();
+        let anchor = pczt_bundle.anchor.to_bytes();
+        let mut actions = pczt_bundle.actions;
+        actions[0].output.note_version = NoteVersion::V2;
+
+        assert!(matches!(
+            super::Bundle::parse(
+                actions,
+                flags,
+                bundle_version,
+                (5000, true),
+                anchor,
+                None,
+                None,
+            ),
+            Err(ParseError::InvalidNoteVersion)
+        ));
+    }
+
+    #[test]
+    fn create_proof_supports_cross_address_disabled_only_for_post_nu6_3() {
+        let rng = OsRng;
+        let sighash = [0; 32];
+
+        // Structural same-expanded-receiver violations are rejected before any key-capability
+        // check, for every circuit version.
+        for circuit_version in [
+            OrchardCircuitVersion::FixedPostNu6_2,
+            OrchardCircuitVersion::PostNu6_3,
+        ] {
+            let pk = ProvingKey::build(circuit_version);
+
+            let mut mismatched_pczt_bundle = minimal_finalized_pczt_bundle(rng);
+            mismatched_pczt_bundle.flags = Flags::CROSS_ADDRESS_DISABLED;
+            assert!(matches!(
+                mismatched_pczt_bundle.create_proof(&pk, rng),
+                Err(ProverError::DisallowedCrossAddressTransfer(_)),
+            ));
+        }
+
+        let (mut pczt_bundle, bundle_meta, spend_ask, change_ask) = restricted_pczt_bundle(rng);
+        pczt_bundle.finalize_io(sighash, rng).unwrap();
+
+        // A pre-NU 6.3 proving key rejects the structurally-conforming restricted
+        // statement at the instance check, leaving the bundle unmodified.
+        let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
+        assert!(matches!(
+            pczt_bundle.create_proof(&pk, rng),
+            Err(ProverError::ProofFailed(
+                halo2_proofs::plonk::Error::InvalidInstances
+            )),
+        ));
+        assert!(pczt_bundle.zkproof.is_none());
+
+        // A post-NU 6.3 proving key proves the same statement, and the proof verifies
+        // in the extracted bundle under the post-NU 6.3 verifying key.
+        let pk = ProvingKey::build(OrchardCircuitVersion::PostNu6_3);
+        pczt_bundle.create_proof(&pk, rng).unwrap();
+
+        pczt_bundle.actions_mut()[bundle_meta.spend_action_index(0).unwrap()]
+            .sign(sighash, &spend_ask, rng)
+            .unwrap();
+        pczt_bundle.actions_mut()[bundle_meta.output_action_index(0).unwrap()]
+            .sign(sighash, &change_ask, rng)
+            .unwrap();
+
+        let bundle = pczt_bundle
+            .extract::<i64>()
+            .unwrap()
+            .unwrap()
+            .apply_binding_signature(sighash, rng)
+            .unwrap();
+        bundle
+            .verify_proof(&VerifyingKey::build(OrchardCircuitVersion::PostNu6_3))
+            .unwrap();
+    }
+
+    #[test]
+    fn restricted_pczt_signing_flow() {
+        let rng = OsRng;
+        let (mut pczt_bundle, bundle_meta, spend_ask, change_ask) = restricted_pczt_bundle(rng);
+
+        let sighash = [0; 32];
+        pczt_bundle.finalize_io(sighash, rng).unwrap();
+        pczt_bundle.verify_cross_address_restriction().unwrap();
+
+        let spend_action_index = bundle_meta.spend_action_index(0).unwrap();
+        let change_action_index = bundle_meta.output_action_index(0).unwrap();
+        assert_ne!(spend_action_index, change_action_index);
+
+        // The fabricated change spend is wallet-controlled: it is signed through the
+        // normal Signer flow, and only by the matching spend authorizing key.
+        assert!(matches!(
+            pczt_bundle.actions_mut()[change_action_index].sign(sighash, &spend_ask, rng),
+            Err(SignerError::WrongSpendAuthorizingKey),
+        ));
+        pczt_bundle.actions_mut()[change_action_index]
+            .sign(sighash, &change_ask, rng)
+            .unwrap();
+        pczt_bundle.actions_mut()[spend_action_index]
+            .sign(sighash, &spend_ask, rng)
+            .unwrap();
+
+        for action in pczt_bundle.actions() {
+            assert!(action.spend.spend_auth_sig.is_some());
+            assert!(action.spend.dummy_sk.is_none());
+        }
+    }
+
+    #[test]
+    fn restricted_pczt_io_finalizer_signs_padding_dummy() {
+        let mut rng = OsRng;
+        let spend_sk = SpendingKey::random(&mut rng);
+        let spend_fvk = FullViewingKey::from(&spend_sk);
+        let spend_recipient = spend_fvk.address_at(0u32, Scope::External);
+        let note_version = NoteVersion::V2;
+
+        let rho = Rho::from_nf_old(Nullifier::dummy(&mut rng));
+        let note = Note::new(
+            spend_recipient,
+            NoteValue::from_raw(15_000),
+            rho,
+            note_version,
+            &mut rng,
+        );
+        let merkle_path = MerklePath::dummy(&mut rng);
+        let anchor = merkle_path.root(note.commitment().into());
+
+        let bundle_version = BundleVersion::orchard_v3();
+        let mut builder = Builder::new(
+            BundleType::DEFAULT,
+            bundle_version,
+            bundle_version.default_flags(),
+            anchor,
+        )
+        .unwrap();
+        builder.add_spend(spend_fvk, note, merkle_path).unwrap();
+
+        let (mut pczt_bundle, bundle_meta) = builder.build_for_pczt(&mut rng).unwrap();
+        assert_eq!(pczt_bundle.actions().len(), 2);
+
+        let spend_action_index = bundle_meta.spend_action_index(0).unwrap();
+        let padding_action_index = 1 - spend_action_index;
+        assert!(pczt_bundle.actions()[padding_action_index]
+            .spend
+            .dummy_sk
+            .is_some());
+
+        let sighash = [0; 32];
+        pczt_bundle.finalize_io(sighash, rng).unwrap();
+
+        // The IO Finalizer signed the padding dummy spend and cleared its `dummy_sk`;
+        // the real spend still needs its signature.
+        let padding_action = &pczt_bundle.actions()[padding_action_index];
+        assert!(padding_action.spend.dummy_sk.is_none());
+        assert!(padding_action.spend.spend_auth_sig.is_some());
+        assert!(pczt_bundle.actions()[spend_action_index]
+            .spend
+            .spend_auth_sig
+            .is_none());
+
+        pczt_bundle.actions_mut()[spend_action_index]
+            .sign(sighash, &SpendAuthorizingKey::from(&spend_sk), rng)
+            .unwrap();
+    }
+
+    #[test]
+    fn finalize_io_rejects_cross_address_violation() {
+        let mut rng = OsRng;
+        let (mut pczt_bundle, _, _, _) = restricted_pczt_bundle(rng);
+
+        let spend_recipient = pczt_bundle.actions()[0].spend.recipient.unwrap();
+        let other_recipient = loop {
+            let fvk = FullViewingKey::from(&SpendingKey::random(&mut rng));
+            let recipient = fvk.address_at(0u32, Scope::External);
+            if !spend_recipient.same_expanded_receiver(&recipient) {
+                break recipient;
+            }
+        };
+        pczt_bundle.actions_mut()[0].output.recipient = Some(other_recipient);
+
+        assert!(matches!(
+            pczt_bundle.finalize_io([0; 32], rng),
+            Err(IoFinalizerError::CrossAddressRestriction(
+                VerifyError::DisallowedCrossAddressTransfer
+            )),
+        ));
+        // The failed call left the bundle unmodified.
+        assert!(pczt_bundle.bsk.is_none());
+    }
+
+    #[test]
+    fn verify_cross_address_restriction_requires_recipients() {
+        let mut pczt_bundle = minimal_finalized_pczt_bundle(OsRng);
+        pczt_bundle.flags = Flags::CROSS_ADDRESS_DISABLED;
+        for action in pczt_bundle.actions_mut() {
+            action.output.recipient = action.spend.recipient;
+        }
+        pczt_bundle.verify_cross_address_restriction().unwrap();
+
+        let original = pczt_bundle.actions()[0].spend.recipient;
+        pczt_bundle.actions_mut()[0].spend.recipient = None;
+        assert!(matches!(
+            pczt_bundle.verify_cross_address_restriction(),
+            Err(VerifyError::MissingRecipient),
+        ));
+
+        pczt_bundle.actions_mut()[0].spend.recipient = original;
+        pczt_bundle.actions_mut()[0].output.recipient = None;
+        assert!(matches!(
+            pczt_bundle.verify_cross_address_restriction(),
+            Err(VerifyError::MissingRecipient),
+        ));
+    }
+
+    #[test]
+    fn extract_preserves_cross_address_disabled() {
+        let rng = OsRng;
+
+        let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
+        pczt_bundle.zkproof = Some(crate::Proof::new(vec![
+            0;
+            crate::Proof::expected_proof_size(
+                pczt_bundle.actions.len()
+            )
+        ]));
+        // Cross-address-disabled flags are only representable from NU6.3 onward, and the Orchard
+        // pool at NU6.3 mandates the restriction; that is the version under which an extracted
+        // bundle can legitimately carry these flags.
+        pczt_bundle.bundle_version = BundleVersion::orchard_v3();
+        pczt_bundle.flags = Flags::CROSS_ADDRESS_DISABLED;
+
+        let bundle = pczt_bundle.extract::<i64>().unwrap().unwrap();
+        assert!(!bundle.flags().cross_address_enabled());
     }
 }

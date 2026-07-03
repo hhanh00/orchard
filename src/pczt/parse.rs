@@ -12,9 +12,12 @@ use zip32::ChildIndex;
 
 use super::{Action, Bundle, Output, Spend, Zip32Derivation};
 use crate::{
-    bundle::Flags,
+    bundle::{BundleVersion, Flags},
     keys::{FullViewingKey, SpendingKey},
     note::{AssetBase, ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
+    note::{
+        ExtractedNoteCommitment, NoteVersion, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext,
+    },
     primitives::redpallas::{self, SpendAuth},
     tree::{MerkleHashOrchard, MerklePath},
     value::{NoteValue, Sign, ValueCommitTrapdoor, ValueCommitment, ValueSum},
@@ -23,17 +26,29 @@ use crate::{
 
 impl Bundle {
     /// Parses a PCZT bundle from its component parts.
+    ///
+    /// See [`BundleVersion`] for the choice of `bundle_version`.
+    ///
     /// `value_sum` is represented as `(magnitude, is_negative)`.
     pub fn parse(
         actions: Vec<Action>,
         flags: u8,
+        bundle_version: BundleVersion,
         value_sum: (u64, bool),
         anchor: [u8; 32],
         zkproof: Option<Vec<u8>>,
         bsk: Option<[u8; 32]>,
         burn: Vec<([u8; 32], u64)>,
     ) -> Result<Self, ParseError> {
-        let flags = Flags::from_byte(flags).ok_or(ParseError::UnexpectedFlagBitsSet)?;
+        let flags =
+            Flags::from_byte(flags, bundle_version).ok_or(ParseError::UnexpectedFlagBitsSet)?;
+
+        let note_version = bundle_version.note_version();
+        for action in actions.iter() {
+            if *action.output.note_version() != note_version {
+                return Err(ParseError::InvalidNoteVersion);
+            }
+        }
 
         let value_sum = {
             let (magnitude, is_negative) = value_sum;
@@ -71,6 +86,7 @@ impl Bundle {
         Ok(Self {
             actions,
             flags,
+            bundle_version,
             value_sum,
             anchor,
             zkproof,
@@ -128,6 +144,7 @@ impl Spend {
         alpha: Option<[u8; 32]>,
         zip32_derivation: Option<Zip32Derivation>,
         dummy_sk: Option<[u8; 32]>,
+        note_version: NoteVersion,
         proprietary: BTreeMap<String, Vec<u8>>,
     ) -> Result<Self, ParseError> {
         let nullifier = Nullifier::from_bytes(&nullifier)
@@ -226,6 +243,7 @@ impl Spend {
             rseed,
             rseed_split_note,
             split_flag,
+            note_version,
             fvk,
             witness,
             alpha,
@@ -253,6 +271,7 @@ impl Output {
         ock: Option<[u8; 32]>,
         zip32_derivation: Option<Zip32Derivation>,
         user_address: Option<String>,
+        note_version: NoteVersion,
         proprietary: BTreeMap<String, Vec<u8>>,
     ) -> Result<Self, ParseError> {
         let cmx = ExtractedNoteCommitment::from_bytes(&cmx)
@@ -296,6 +315,8 @@ impl Output {
             enc_ciphertext,
             out_ciphertext,
             asset,
+            note_version,
+            encrypted_note,
             recipient,
             value,
             rseed,
@@ -368,8 +389,11 @@ pub enum ParseError {
     InvalidZip32Derivation,
     /// `rho` must be provided whenever `rseed` is provided.
     MissingRho,
-    /// The provided `flags` field had unexpected bits set.
+    /// The provided `flags` field had unexpected bits set for the bundle's pool
+    /// restrictions.
     UnexpectedFlagBitsSet,
+    /// An invalid `note_version` was provided.
+    InvalidNoteVersion,
 }
 
 impl fmt::Display for ParseError {
@@ -397,6 +421,7 @@ impl fmt::Display for ParseError {
                 write!(f, "`rho` must be provided whenever `rseed` is provided")
             }
             ParseError::UnexpectedFlagBitsSet => write!(f, "`flags` field had unexpected bits set"),
+            ParseError::InvalidNoteVersion => write!(f, "invalid `note_version`"),
         }
     }
 }

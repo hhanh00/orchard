@@ -9,7 +9,7 @@ use subtle::CtOption;
 use crate::{
     note::{ExtractedNoteCommitment, Nullifier, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, SpendAuth},
-    flavor::NoteFlavor,
+    flavor::{NoteFlavor, NormalFlavor},
     sighash_kind::OrchardSpendAuthSig,
     value::ValueCommitment,
 };
@@ -24,7 +24,7 @@ use crate::{
 /// Every `Action` has a non-identity `rk`, and an `epk_bytes` that encodes a
 /// non-identity [`pasta_curves::pallas::Point`].
 #[derive(Debug, Clone)]
-pub struct Action<A, Pr: NoteFlavor> {
+pub struct Action<A, Pr: NoteFlavor = NormalFlavor> {
     /// The nullifier of the note being spent.
     nf: Nullifier,
     /// The randomized verification key for the note being spent.
@@ -211,7 +211,7 @@ pub(crate) mod testing {
         primitives::OrchardDomain,
         sighash_kind::{OrchardSighashKind, OrchardSpendAuthSig},
         value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
-        Note,
+        Note, NoteVersion,
     };
 
     use super::Action;
@@ -309,6 +309,68 @@ pub(crate) mod testing {
                 }
             }
         }
+    }
+
+    /// Generate an unauthorized action with the given note version.
+    pub fn arb_unauthorized_action_note_version(
+        note_version: NoteVersion,
+        spend_value: NoteValue,
+        output_value: NoteValue,
+    ) -> impl Strategy<Value = Action<()>> {
+        use crate::action::testing::arb_note;
+        use crate::note_encryption::testing::encrypted_note_for;
+
+        (arb_nullifier(), arb_spendauth_verification_key(), arb_note(output_value, note_version), proptest::array::uniform32(proptest::num::u8::ANY))
+            .prop_map(move |(nf, rk, note, rng_seed)| {
+                let cmx = ExtractedNoteCommitment::from(note.commitment());
+                let cv_net = ValueCommitment::derive(
+                    spend_value - output_value,
+                    ValueCommitTrapdoor::zero()
+                );
+                let encrypted_note =
+                    encrypted_note_for(note, &cv_net, &cmx, StdRng::from_seed(rng_seed));
+                Action {
+                    nf,
+                    rk,
+                    cmx,
+                    encrypted_note,
+                    cv_net,
+                    authorization: ()
+                }
+            })
+    }
+
+    /// Generate an action with invalid (random) authorization data and the given note version.
+    pub fn arb_action_note_version(
+        note_version: NoteVersion,
+        spend_value: NoteValue,
+        output_value: NoteValue,
+    ) -> impl Strategy<Value = Action<redpallas::Signature<SpendAuth>>> {
+        use crate::note_encryption::testing::encrypted_note_for;
+
+        let sk_gen = arb_spendauth_signing_key();
+        (arb_nullifier(), sk_gen, arb_note(output_value, note_version),
+         proptest::array::uniform32(proptest::num::u8::ANY),
+         proptest::array::uniform32(proptest::num::u8::ANY),
+         proptest::array::uniform32(proptest::num::u8::ANY))
+            .prop_map(move |(nf, sk, note, enc_rng_seed, rng_seed, fake_sighash)| {
+                let rk = redpallas::VerificationKey::from(&sk);
+                let cmx = ExtractedNoteCommitment::from(note.commitment());
+                let cv_net = ValueCommitment::derive(
+                    spend_value - output_value,
+                    ValueCommitTrapdoor::zero()
+                );
+                let encrypted_note =
+                    encrypted_note_for(note, &cv_net, &cmx, StdRng::from_seed(enc_rng_seed));
+                Action {
+                    nf,
+                    rk,
+                    cmx,
+                    encrypted_note,
+                    cv_net,
+                    authorization: sk.sign(StdRng::from_seed(rng_seed), &fake_sighash),
+                }
+            })
     }
 }
 

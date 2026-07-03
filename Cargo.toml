@@ -1,6 +1,6 @@
 [package]
 name = "orchard"
-version = "0.14.0"
+version = "0.15.0-pre.1"
 authors = [
     "Sean Bowe <ewillbefull@gmail.com>",
     "Jack Grigg <thestr4d@gmail.com>",
@@ -114,7 +114,6 @@ debug = true
 
 [patch.crates-io]
 sinsemilla = { git = "https://github.com/zcash/sinsemilla", rev = "aabb707e862bc3d7b803c77d14e5a771bcee3e8c" }
-zcash_note_encryption = { path = "../zcash_note_encryption" }
 halo2_gadgets = { git = "https://github.com/zcash-shielded-assets/halo2", rev = "d687ce0e3e913549cab370ec66765e6d59d4612f" }
 halo2_proofs = { git = "https://github.com/zcash-shielded-assets/halo2", rev = "d687ce0e3e913549cab370ec66765e6d59d4612f" }
 zcash_spec = { git = "https://github.com/QED-it/zcash_spec", rev = "d5e84264d2ad0646b587a837f4e2424ca64d3a05" }

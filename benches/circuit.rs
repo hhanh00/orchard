@@ -10,6 +10,9 @@ use orchard::{
     builder::Builder,
     circuit::{ProvingKey, VerifyingKey},
     flavor::{OrchardVanilla, OrchardZSA},
+    builder::{Builder, BundleType},
+    bundle::BundleVersion,
+    circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
     keys::{FullViewingKey, Scope, SpendingKey},
     note::AssetBase,
     value::NoteValue,
@@ -35,6 +38,17 @@ fn criterion_benchmark<FL: OrchardFlavorBench>(c: &mut Criterion) {
             FL::DEFAULT_BUNDLE_TYPE,
             Anchor::from_bytes([0; 32]).unwrap(),
         );
+    let vk = VerifyingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
+    let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
+
+    let create_bundle = |num_recipients| {
+        let mut builder = Builder::new(
+            BundleType::DEFAULT,
+            BundleVersion::orchard_v2(),
+            BundleVersion::orchard_v2().default_flags(),
+            Anchor::from_bytes([0; 32]).unwrap(),
+        )
+        .unwrap();
         for _ in 0..num_recipients {
             builder
                 .add_output(

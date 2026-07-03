@@ -3,6 +3,9 @@ use orchard::{
     builder::Builder,
     circuit::ProvingKey,
     flavor::{OrchardVanilla, OrchardZSA},
+    builder::{Builder, BundleType},
+    bundle::BundleVersion,
+    circuit::{OrchardCircuitVersion, ProvingKey},
     keys::{FullViewingKey, PreparedIncomingViewingKey, Scope, SpendingKey},
     note::AssetBase,
     primitives::{CompactAction, OrchardDomain},
@@ -22,6 +25,7 @@ use utils::OrchardFlavorBench;
 fn bench_note_decryption<FL: OrchardFlavorBench>(c: &mut Criterion) {
     let rng = OsRng;
     let pk = ProvingKey::build::<FL>();
+    let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
 
     let fvk = FullViewingKey::from(&SpendingKey::from_bytes([7; 32]).unwrap());
     let valid_ivk = fvk.to_ivk(Scope::External);
@@ -54,6 +58,12 @@ fn bench_note_decryption<FL: OrchardFlavorBench>(c: &mut Criterion) {
             FL::DEFAULT_BUNDLE_TYPE,
             Anchor::from_bytes([0; 32]).unwrap(),
         );
+            BundleType::DEFAULT,
+            BundleVersion::orchard_v2(),
+            BundleVersion::orchard_v2().default_flags(),
+            Anchor::from_bytes([0; 32]).unwrap(),
+        )
+        .unwrap();
         // The builder pads to two actions, and shuffles their order. Add two recipients
         // so the first action is always decryptable.
         builder
